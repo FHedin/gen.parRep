@@ -12,7 +12,7 @@ Link to the project gitlab page (includes more resources):
 
 See the following articles:
   * A generalized parallel replica dynamics: Binder, Lelièvre & Simpson, 2015: https://doi.org/10.1016/j.jcp.2015.01.002
-  * A new implementation of the Generalized Parallel Replica Dynamics targeting metastable biochemical systems: Hédin & Lelièvre, 2018: ADD DOI/ARXIV HERE
+  * A new implementation of the Generalized Parallel Replica Dynamics targeting metastable biochemical systems: Hédin & Lelièvre, 2018: https://arxiv.org/abs/1807.02431
 
 ----------------------------------------------
 ## DOCUMENTATION
