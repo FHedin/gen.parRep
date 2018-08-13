@@ -155,6 +155,9 @@ private:
   
   std::string platformName;
   
+  std::vector<OpenMM::Vec3> pos;
+  std::vector<OpenMM::Vec3> vel;
+  
   /*
    * This is used when calling runForPhysicalTime
    * The first time it is called we estimate how much of CPU physical time will cost one integration step,

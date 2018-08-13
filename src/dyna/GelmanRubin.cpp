@@ -203,7 +203,7 @@ bool GelmanRubinAnalysis::check_convergence(const string& obName)
   vector<double>& rvec = ratio[obName];
   
   bool check;
-  if(rvec.size()<discard_first)
+  if(rvec.size() < discard_first)
     check = false;
   else
     check = (fabs(1.0-rvec.back()) < tolerance[obName])? true : false ;
@@ -261,5 +261,9 @@ void GelmanRubinAnalysis::reset_all_chains()
   }
   
   for(const string& st : obsTypes)
+  {
     ratio[st].clear();
+    ratio[st].resize(0);
+    ratio[st].shrink_to_fit();
+  }
 }

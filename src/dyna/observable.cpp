@@ -124,4 +124,6 @@ void Observable::replace_observations(const vector<double>& extern_observations)
 void Observable::reset_observations()
 {
   observations.clear();
+  observations.resize(0);
+  observations.shrink_to_fit();
 }

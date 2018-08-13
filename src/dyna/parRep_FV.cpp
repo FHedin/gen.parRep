@@ -68,7 +68,7 @@ ParRepFV::ParRepFV(DATA& _dat,
   
   // calculate polling time from input params
   t_poll = ((double)dynamics_check)*dat.timestep ;
-  
+
 }
 
 ///////////////////////////////////////////////////
@@ -82,19 +82,9 @@ void ParRepFV::run()
   fprintf(stdout,"\nRunning a Generalized ParRep with Gelman-Rubin statistics and Fleming-Viot particle processes.\n"
                  "Role of this replica is: %s\n",role_string.at(my_FV_role).c_str());
   
-  // open database of states : saved in memory for performance but regularly backed up to a file in case of crash
-  db_open();
-  
-  // The ref walker is in charge of allocating the GelmanRubinAnalysis object, it will also check the convergence
+  // open database of states
   if(i_am_master)
-  {
-    gr = unique_ptr<GelmanRubinAnalysis>(new GelmanRubinAnalysis((uint32_t)mpi_gcomm_size));
-    // register grObservables parsed from lua file
-    for(const pair<GR_function_name,GR_function>& p : gr_functions)
-    {
-      gr->registerObservable(Observable(p.first),grTol);
-    }
-  }
+    db_open();
   
   /*
    * Stage 0 : Equilibrate the system for some steps
@@ -110,7 +100,7 @@ void ParRepFV::run()
     }
     MPI_Barrier(global_comm);
     
-    MPIutils::mpi_ibroadcast_atom_array(dat,at.get(),masterRank,global_comm);
+    MPIutils::mpi_broadcast_atom_array(dat,at.get(),masterRank,global_comm);
     // not required on masterRank : provide to openmm coordinates and velocities from equilibration
     if(!i_am_master)
     {
@@ -126,19 +116,50 @@ void ParRepFV::run()
     luaItf->set_lua_variable("referenceTime",ref_clock_time);
   }
   
+  MPI_Barrier(global_comm);
+  
   // after equilibration and before starting parrep algorithm it is time to initialise the Lua code defining a state
   lua_state_init();
+  
+  /*
+   * First be sure that the system is within a metastable state, if not perform transient propagation
+   */
+  bool need_transient_propagation = lua_check_transient();
+  if(need_transient_propagation)
+  {
+    ENERGIES tr_e;
+    
+    if(i_am_master)
+    {
+      do_transient_propagation(tr_e);
+    }
+    MPI_Barrier(global_comm);
+    
+    // broadcast to the others
+    MPI_Bcast(&ref_clock_time,1,MPI_DOUBLE,masterRank,global_comm);
+    MPI_Bcast(tr_e.ene.data(),3,MPI_DOUBLE,masterRank,global_comm);
+    MPIutils::mpi_broadcast_atom_array(dat,at.get(),masterRank,global_comm);
+    
+    // update lua interface
+    luaItf->set_lua_variable("epot",tr_e.epot());
+    luaItf->set_lua_variable("ekin",tr_e.ekin());
+    luaItf->set_lua_variable("etot",tr_e.etot());
+    luaItf->set_lua_variable("referenceTime",ref_clock_time);
+    
+    // call state_init again now that we are sure to be within a state
+    lua_state_init();
+  }
+  
+  MPI_Barrier(global_comm);
   
   /*
    * NOTE main loop here
    */
   do
   {
-    LOG_PRINT(LOG_INFO,"New ParRepFV loop iteration : ref_clock_time is %.2lf ps \n",
-              ref_clock_time);
+    LOG_PRINT(LOG_INFO,"New ParRepFV loop iteration : ref_clock_time is %.2lf ps \n",  ref_clock_time);
     fprintf(stdout,"\n//---------------------------------------------------------------------------------------------//\n");
-    fprintf(stdout,    "New ParRepFV loop iteration : ref_clock_time is %.2lf ps \n\n",
-              ref_clock_time);
+    fprintf(stdout,    "New ParRepFV loop iteration : ref_clock_time is %.2lf ps \n\n",ref_clock_time);
     
     fv_local_time = 0.;
     fv_e = ENERGIES();
@@ -155,10 +176,6 @@ void ParRepFV::run()
     luaItf->set_lua_variable("ekin",fv_e.ekin());
     luaItf->set_lua_variable("etot",fv_e.etot());
     luaItf->set_lua_variable("referenceTime",ref_clock_time);
-    
-    // reset GR object before continuing
-    if(i_am_master)
-      gr->reset_all_chains();
 
     /*
      * stage 2 : Run parallel dynamics 
@@ -173,21 +190,34 @@ void ParRepFV::run()
     // there was already a barrier at the end of do_dynamics() so from here we suppose synchronization of all the replicas
     
     /*
-     * find the id of the rank that escaped the state to all others
+     * find and send the id of the rank that escaped the state to all others
      * MPI_MIN corresponds to a min of the argmin
      */
     MPI_Allreduce(MPI_IN_PLACE,&breakerID,1,MPI_UINT32_T,
                   MPI_MIN,global_comm);
     
+    // transient propagation if required
+    if(mpi_id_in_gcomm==(int32_t)breakerID)
+    {
+      need_transient_propagation = lua_check_transient();
+      if(need_transient_propagation)
+      {
+        do_transient_propagation(dyna_e);
+        luaItf->set_lua_variable("referenceTime",ref_clock_time);
+      }
+    }
+    MPI_Barrier(global_comm);
+    
     /*
-     * then broadcast the escaping time,
-     *  updated ref clock time, energy, and crds+vels to everyone else
+     * broacast data from breaking replica to the others
      */
     MPI_Bcast(&dyna_local_time,1,MPI_DOUBLE,breakerID,global_comm);
     MPI_Bcast(&dyna_cycles_done,1,MPI_UINT32_T,breakerID,global_comm);
     MPI_Bcast(&ref_clock_time,1,MPI_DOUBLE,breakerID,global_comm);
-    MPI_Bcast(&(dyna_e.ene[0]),3,MPI_DOUBLE,breakerID,global_comm);
-    MPIutils::mpi_ibroadcast_atom_array(dat,at.get(),breakerID,global_comm);
+    MPI_Bcast(dyna_e.ene.data(),3,MPI_DOUBLE,breakerID,global_comm);
+    
+    // coordinates and velocities are broadcasted using a non blocking ibroadcast so that we can do something else in the mean time
+    MPIutils::mpi_broadcast_atom_array(dat,at.get(),breakerID,global_comm);
     
     /*
      * the ref_clock_time is updated using the escape time
@@ -213,13 +243,13 @@ void ParRepFV::run()
     luaItf->set_lua_variable("referenceTime",ref_clock_time);
 
     // save the state and the escape time to the database
-    if((uint32_t)mpi_id_in_gcomm==breakerID)
+    if(i_am_master)
     {
       db_insert(true,fv_local_time,escape_time);
     }
     
-    // frequent sqlite in-memory db backup to a file
-    if( (ref_clock_time-last_db_backup) > db_backup_frequency_ps )
+    // if necessary db backup is performed
+    if(i_am_master && ((ref_clock_time-last_db_backup) > db_backup_frequency_ps) )
     {
       db_backup();
       last_db_backup = ref_clock_time;
@@ -234,19 +264,23 @@ void ParRepFV::run()
     // and each rank uses the system of the dyna breaking one
     md->setCrdsVels(at.get());
     
-    // now all ranks need to check again what is the current state in order to be ready for next iteration
+    // now all ranks need to re-initialize the state identification code on Lua's side
     lua_state_init();
     
     /*
      * Ready to loop again
      */
+    MPI_Barrier(global_comm);
     
   }while( ref_clock_time < ((double)dat.nsteps * dat.timestep) );
   // NOTE End of main loop here
   
-  // backup in-memory database to file before exiting simulation 
-  db_backup();
-  db_close();
+  if(i_am_master)
+  {
+    // backup database to file if required before exiting simulation 
+    db_backup();
+    db_close();
+  }
   
   MPI_Barrier(global_comm);
       
@@ -260,18 +294,36 @@ void ParRepFV::run()
 
 void ParRepFV::do_FlemingViot_procedure()
 {
-  LOG_PRINT(LOG_INFO,"Rank %d performing Fleming-Viot procedure\n",mpi_id_in_gcomm);
+  LOG_PRINT(LOG_INFO,"Rank %d performing Fleming-Viot procedure\n",  mpi_id_in_gcomm);
   fprintf(stdout,    "Rank %d performing Fleming-Viot procedure\n\n",mpi_id_in_gcomm);
+  
+  /**
+   *  the C++ interface for collecting Gelman-Rubin statistics
+   *  For the moment only rank masterRank will manage it.
+   *  The others regularly send their data (stored in gr_observations) to rank masterRank
+   */
+  std::unique_ptr<GelmanRubinAnalysis> gr = nullptr;
+  
+  // The ref walker is in charge of allocating the GelmanRubinAnalysis object, it will also check the convergence
+  if(i_am_master)
+  {
+    gr = unique_ptr<GelmanRubinAnalysis>(new GelmanRubinAnalysis((uint32_t)mpi_gcomm_size));
+    // register grObservables parsed from lua file
+    for(const pair<GR_function_name,GR_function>& p : gr_functions)
+    {
+      gr->registerObservable(Observable(p.first),grTol);
+    }
+  }
   
   // number of observables that the workers send to the ref walker every fv_check steps
   const uint32_t numObs = fv_check/gr_check;
 
   // This will store the observables sent by the workers to the ref walker
-  map<GR_function_name,unique_ptr<double[]>> recvObsMap;
+  map<GR_function_name,double*> recvObsMap;
   if(my_FV_role == REF_WALKER)
   {
     for(const GR_function_name& n: gr_names)
-      recvObsMap[n] = unique_ptr<double[]>(new double[mpi_gcomm_size*numObs]);
+      recvObsMap[n] = new double[mpi_gcomm_size*numObs];
   }
   
   // stores requests used when gathering in non blocking mode on ref walker the observables sent by the workers
@@ -281,8 +333,8 @@ void ParRepFV::do_FlemingViot_procedure()
   bool i_need_branching = false;
 
   // declaration and create of sattic memory windows for one sided MPI comms
-  MPI_Win at_window = MPI_WIN_NULL;
-  MPI_Win pbc_window = MPI_WIN_NULL;
+  MPI_Win at_window        = MPI_WIN_NULL;
+  MPI_Win pbc_window       = MPI_WIN_NULL;
   MPI_Win branching_window = MPI_WIN_NULL;
 
   // set the at[] as a window of memory accessible by other ranks: one sided communications
@@ -312,18 +364,19 @@ void ParRepFV::do_FlemingViot_procedure()
    * 
    * From time to time this data is sent to masterRank which owns the GelmanRubinAnalysis object, and the masterRank checks convergence
    */
-  map<GR_function_name,vector<double>> gr_observations;
+  map<GR_function_name,double*> gr_observations;
   
   /*
    * In order to use MPI_Win_create_dynamic we also need a record of the MPI_Aint 
    * address at which the vector<double>() are stored, and a static window for allowing RMA access to each of them
    */
   map<GR_function_name,MPI_Aint> gr_addr;
-  map<GR_function_name,MPI_Win> gr_windows_addr;
+  map<GR_function_name,MPI_Win>  gr_windows_addr;
   
   for(const GR_function_name& n: gr_names)
   {
-    gr_observations[n] = vector<double>();
+    //gr_observations[n] = vector<double>();
+    gr_observations[n] = new double[numObs];
     gr_addr[n] = 0;
     gr_windows_addr[n] = MPI_WIN_NULL;
     MPI_Win_create(&(gr_addr[n]),sizeof(MPI_Aint),sizeof(MPI_Aint),
@@ -342,10 +395,14 @@ void ParRepFV::do_FlemingViot_procedure()
    */
   uint32_t steps_since_last_check_state = 0;
   uint32_t steps_since_beginning = 0;
+  uint32_t obsIndex = 0;
+  
   bool converged = false;
   bool reset_loop = false;
+  
   MPI_Win converged_window = MPI_WIN_NULL;
   MPI_Win reset_window = MPI_WIN_NULL;
+  
   MPI_Win_create(&converged,sizeof(bool),sizeof(bool),
                  rma_info,global_comm,&converged_window);
   MPI_Win_create(&reset_loop,sizeof(bool),sizeof(bool),
@@ -363,12 +420,11 @@ void ParRepFV::do_FlemingViot_procedure()
     md->doNsteps(gr_check);
 
     // wait until data sent in the igather (observables) arrived to the master node
-    MPI_Waitall(igather_obs_reqs.size(),igather_obs_reqs.data(),MPI_STATUS_IGNORE);
+    MPI_Waitall(gr_names.size(),igather_obs_reqs.data(),MPI_STATUSES_IGNORE);
 
     if(steps_since_last_check_state == 0)
     {
-      for(const GR_function_name& n: gr_names)
-        gr_observations[n].clear();
+      obsIndex = 0;
     }
     
     /*
@@ -396,12 +452,10 @@ void ParRepFV::do_FlemingViot_procedure()
       // first retrieve the type of observable (name), the pointer to the lua function (f) corresponding to it, and the vector of observations (v) corresponding to name 
       const GR_function_name& name = p.first;
       const GR_function&         f = p.second;
-      vector<double>&            v = gr_observations[name];
       
-      // then get the observation and add it to the observations vector v
-      const double obs = f();
-      v.push_back(obs);
+      gr_observations[name][obsIndex] = f();
     }
+    obsIndex += 1;
     
     // do the following F-V branching procedure less often (every fv_check steps)
     //  than the GR accumulation phase (gr_check)
@@ -419,15 +473,16 @@ void ParRepFV::do_FlemingViot_procedure()
     //  if REF_WALKER exiting: it is required to tell the FV_WORKER s that we have to reset
     ///////////////////////////////////////////////////////////////////////////////////////////////////
     
-    if( (my_FV_role == REF_WALKER) && left_state)
+    if(i_am_master && left_state)
     {
-      LOG_PRINT(LOG_INFO,"Rank %d (Ref. Walker) exited the ref. state; stopping all the ranks and continuing the FV algorithm for the new state...\n",mpi_id_in_gcomm);
-      fprintf(stdout,    "Rank %d (Ref. Walker) exited the ref. state; stopping all the ranks and continuing the FV algorithm for the new state...\n\n",mpi_id_in_gcomm);
+      LOG_PRINT(LOG_INFO,"Rank %d (Ref. Walker) exited the ref. state...\n",  mpi_id_in_gcomm);
+      fprintf(stdout,    "Rank %d (Ref. Walker) exited the ref. state...\n\n",mpi_id_in_gcomm);
       
       db_insert(false,0.0,fv_local_time);
       
       // set the reset_loop flag to true for all other replicas so that they stop soon
       reset_loop = true;
+      
       MPI_Win_lock_all(MPI_MODE_NOCHECK,reset_window);
       for(int32_t i=1; i<mpi_gcomm_size; i++)
       {
@@ -439,6 +494,16 @@ void ParRepFV::do_FlemingViot_procedure()
       }
       MPI_Win_unlock_all(reset_window);
       
+      // perform transient propagation if required
+      bool need_transient_propagation = lua_check_transient();
+      if(need_transient_propagation)
+      {
+        do_transient_propagation(fv_e);
+        luaItf->set_lua_variable("referenceTime",ref_clock_time);
+        luaItf->set_lua_variable("epot",fv_e.epot());
+        luaItf->set_lua_variable("ekin",fv_e.ekin());
+        luaItf->set_lua_variable("etot",fv_e.etot());
+      }
     }
 
     /*
@@ -455,37 +520,24 @@ void ParRepFV::do_FlemingViot_procedure()
     
     /*
      * attach the windows to the observable values
-     * NOTE useless if reset_loop is triggered below
-     * But this is supposed to be something really rare, so we put this code here in order to hibe the latency of the barrier.
-     * if reset_loop is trigerred, this step is undone immediately.
      */
     for(const GR_function_name& n: gr_names)
     {
       MPI_Win& w = gr_windows[n];
-      vector<double>& obs = gr_observations[n];
       MPI_Aint& addr = gr_addr[n];
-      MPI_Win_attach(w, obs.data(), obs.size()*sizeof(double));
-      MPI_Get_address(obs.data(),&addr);
+      
+      MPI_Win_attach(w, gr_observations[n], obsIndex*sizeof(double));
+      MPI_Get_address(gr_observations[n],&addr);
     }
     
-    // we did our best to do something else, but now we have no choice and we should wait for the ibarrier completion ...
     MPI_Wait(&barrier_req,MPI_STATUS_IGNORE);
     
     // executed by all ranks when a reset is required
     if(reset_loop)
     {
-      MPI_Request* ibcast_reqs = nullptr;
-      MPI_Request  ibcast_req = MPI_REQUEST_NULL;
-         
-      // masterRanks broadcasts its config to the other in a non blocking way
-      ibcast_reqs = MPIutils::mpi_ibroadcast_atom_array_nowait(dat,at.get(),masterRank,global_comm);
-           
-      MPI_Ibcast(&fv_e.ene[0],3,MPI_DOUBLE,masterRank,global_comm,&ibcast_req);
-
-      // before waiting for the ibcast to complete, reset other things here to hide latency 
-      
-      // update reference clock time
-      ref_clock_time += fv_local_time;
+      MPIutils::mpi_broadcast_atom_array(dat,at.get(),masterRank,global_comm);
+      MPI_Bcast(fv_e.ene.data(),3,MPI_DOUBLE,masterRank,global_comm);
+      MPI_Bcast(&ref_clock_time,1,MPI_DOUBLE,masterRank,global_comm);
       
       converged = false;
       reset_loop = false;
@@ -493,31 +545,33 @@ void ParRepFV::do_FlemingViot_procedure()
       steps_since_last_check_state = 0;
       steps_since_beginning = 0;
       
-      // enforce requests to be null
-      // NOTE already the case if everything done properly
-      barrier_req = MPI_REQUEST_NULL;
+      if(barrier_req != MPI_REQUEST_NULL)
+        MPI_Request_free(&barrier_req);
 
-      // undo the useless memory attachment
+      // undo the memory attachment
       for(const GR_function_name& n: gr_names)
       {
         MPI_Win& w = gr_windows[n];
-        vector<double>& obs = gr_observations[n];
-        
-        MPI_Win_detach(w, obs.data());
-        
+        MPI_Win_detach(w, gr_observations[n]);
         gr_addr[n] = 0;
-        gr_observations[n].clear();
+        obsIndex = 0;
       }
       
       for(size_t i=0; i<gr_names.size(); i++)
-        igather_obs_reqs[i] = MPI_REQUEST_NULL;
+      {
+        if(igather_obs_reqs[i] != MPI_REQUEST_NULL)
+          MPI_Request_free(&igather_obs_reqs[i]);
+      }
       
       md->setSimClockTime(0.);
-      // update lua interface
-      luaItf->set_lua_variable("referenceTime",ref_clock_time);
       
-      // wait for completion of mpi_ibroadcast_atom_array_nowait and then update
-      MPI_Waitall(2,ibcast_reqs,MPI_STATUSES_IGNORE);
+      luaItf->set_lua_variable("epot",fv_e.epot());
+      luaItf->set_lua_variable("ekin",fv_e.ekin());
+      luaItf->set_lua_variable("etot",fv_e.etot());
+      
+      // update reference clock time
+      ref_clock_time += fv_local_time;
+      luaItf->set_lua_variable("referenceTime",ref_clock_time);
       
       if(!i_am_master)
       {
@@ -527,12 +581,6 @@ void ParRepFV::do_FlemingViot_procedure()
       {
         gr->reset_all_chains();
       }
-      
-      // wait for energy broadcast and update lua again
-      MPI_Wait(&ibcast_req,MPI_STATUS_IGNORE);
-      luaItf->set_lua_variable("epot",fv_e.epot());
-      luaItf->set_lua_variable("ekin",fv_e.ekin());
-      luaItf->set_lua_variable("etot",fv_e.etot());
       
       // now all ranks need to check again what is the current state in order to be ready for next iteration
       lua_state_init();
@@ -574,9 +622,9 @@ void ParRepFV::do_FlemingViot_procedure()
         bool candidate_also_branching = false;
         
         MPI_Win_lock(MPI_LOCK_SHARED,candidate,0,branching_window);
-        MPI_Get(&candidate_also_branching,1, // void *origin_addr, int origin_count,
+        MPI_Get(&candidate_also_branching,1,   // void *origin_addr, int origin_count,
                 MPI_CXX_BOOL,candidate,        // MPI_Datatype origin_datatype, int target_rank,
-                0,1,                         // MPI_Aint target_disp, int target_count,
+                0,1,                           // MPI_Aint target_disp, int target_count,
                 MPI_CXX_BOOL,branching_window);// MPI_Datatype target_datatype, MPI_Win win
         MPI_Win_unlock(candidate,branching_window);
         
@@ -596,10 +644,10 @@ void ParRepFV::do_FlemingViot_procedure()
               0,dat.natom*sizeof(ATOM),        // MPI_Aint target_disp, int target_count,
               MPI_BYTE,at_window);             // MPI_Datatype target_datatype, MPI_Win win
       
-      MPI_Get(dat.pbc.data(),sizeof(dat.pbc), // void *origin_addr, int origin_count,
-              MPI_BYTE,candidate,                    // MPI_Datatype origin_datatype, int target_rank,   
-              0,sizeof(dat.pbc),              // MPI_Aint target_disp, int target_count,
-              MPI_BYTE,pbc_window);                  // MPI_Datatype target_datatype, MPI_Win win
+      MPI_Get(dat.pbc.data(),sizeof(dat.pbc),  // void *origin_addr, int origin_count,
+              MPI_BYTE,candidate,              // MPI_Datatype origin_datatype, int target_rank,   
+              0,sizeof(dat.pbc),               // MPI_Aint target_disp, int target_count,
+              MPI_BYTE,pbc_window);            // MPI_Datatype target_datatype, MPI_Win win
 
       // remove lock and proceed
       MPI_Win_unlock(candidate,at_window);
@@ -617,13 +665,12 @@ void ParRepFV::do_FlemingViot_procedure()
         MPI_Win_unlock(candidate,gr_win_addr);
         
         // step 2 : data exchange
-        vector<double>& obs = gr_observations[n];
         MPI_Win& gr_win = gr_windows[n];
         
         MPI_Win_lock(MPI_LOCK_SHARED,candidate,0,gr_win);
-        MPI_Get(obs.data(),obs.size(),// void *origin_addr, int origin_count,
+        MPI_Get(gr_observations[n],obsIndex,// void *origin_addr, int origin_count,
                 MPI_DOUBLE,candidate, // MPI_Datatype origin_datatype, int target_rank,
-                addr,obs.size(),         // MPI_Aint target_disp, int target_count,
+                addr,obsIndex,         // MPI_Aint target_disp, int target_count,
                 MPI_DOUBLE,gr_win);   // MPI_Datatype target_datatype, MPI_Win win
         MPI_Win_unlock(candidate,gr_win);
       }
@@ -658,9 +705,8 @@ void ParRepFV::do_FlemingViot_procedure()
     for(const GR_function_name& n: gr_names)
     {
       MPI_Win& w = gr_windows[n];
-      vector<double>& obs = gr_observations[n];
       MPI_Aint& addr = gr_addr[n];
-      MPI_Win_detach(w, obs.data());
+      MPI_Win_detach(w, gr_observations[n]);
       addr = 0;
     }
     
@@ -668,9 +714,10 @@ void ParRepFV::do_FlemingViot_procedure()
     for(size_t i=0; i<gr_names.size(); i++)
     {
       const string& n = gr_names[i];
-      double* recvObs = (my_FV_role == REF_WALKER) ? recvObsMap[n].get() : nullptr;
       
-      MPI_Igather(gr_observations[n].data(),numObs,MPI_DOUBLE,
+      double* recvObs = (my_FV_role == REF_WALKER) ? recvObsMap[n] : nullptr;
+      
+      MPI_Igather(gr_observations[n],numObs,MPI_DOUBLE,
                   recvObs,numObs,MPI_DOUBLE,
                   masterRank,global_comm,&igather_obs_reqs[i]);
     }
@@ -684,11 +731,11 @@ void ParRepFV::do_FlemingViot_procedure()
      */
     if(my_FV_role == REF_WALKER)
     {
-      MPI_Waitall(igather_obs_reqs.size(),igather_obs_reqs.data(),MPI_STATUSES_IGNORE);
+      MPI_Waitall(gr_names.size(),igather_obs_reqs.data(),MPI_STATUSES_IGNORE);
       
       for(const GR_function_name& n : gr_names)
       {
-        double* recvObs = recvObsMap[n].get();
+        double* recvObs = recvObsMap[n]; //.get();
         for(int32_t i=0; i<mpi_gcomm_size; i++)
         {
           const size_t from = i*numObs;
@@ -750,13 +797,33 @@ void ParRepFV::do_FlemingViot_procedure()
       for(uint32_t n=0; n<(uint32_t)mpi_gcomm_size; n++)
         gr->describeChain(n);
     }
+    
+    for(const GR_function_name& n : gr_names)
+      delete[] recvObsMap[n];
+
+    recvObsMap.clear();
   }
 
   // update reference clock time
   ref_clock_time += fv_local_time;
 
   //----------------------
-
+  
+  // reset GR object before continuing
+  if(i_am_master)
+    gr->reset_all_chains();
+  
+  for(const GR_function_name& n: gr_names)
+    delete[] gr_observations[n];
+  
+  gr_observations.clear();
+  
+  for(size_t i=0; i<gr_names.size(); i++)
+  {
+    if(igather_obs_reqs[i] != MPI_REQUEST_NULL)
+      MPI_Request_free(&igather_obs_reqs[i]);
+  }
+  
   MPI_Win_free(&at_window);
   MPI_Win_free(&pbc_window);
   MPI_Win_free(&branching_window);

@@ -46,9 +46,10 @@ void ParRep::run()
 {
   fprintf(stdout,"\nRunning a standard ParRep.\n\n");
 
-  // open database of states : saved in memory for performance but regularly backed up to a file in case of crash
-  db_open();
-  
+  // open database of states
+  if(i_am_master)
+    db_open();
+
   /*
    * Stage 0 : Equilibrate the system for some steps
    *  and use as reference state at the beginning
@@ -63,7 +64,7 @@ void ParRep::run()
     }
     MPI_Barrier(global_comm);
     
-    MPIutils::mpi_ibroadcast_atom_array(dat,at.get(),masterRank,global_comm);
+    MPIutils::mpi_broadcast_atom_array(dat,at.get(),masterRank,global_comm);
     // not required on masterRank : provide to openmm coordinates and velocites from equilibration
     if(!i_am_master)
     {
@@ -81,6 +82,35 @@ void ParRep::run()
   
   // after equilibration and before starting parrep algorithm it is time to initialise the Lua code defining a state
   lua_state_init();
+  
+  /*
+   * First be sure that the system is within a metastable state, if not perform transient propagation
+   */
+  bool need_transient_propagation = lua_check_transient();
+  if(need_transient_propagation)
+  {
+    ENERGIES tr_e;
+    
+    if(i_am_master)
+    {
+      do_transient_propagation(tr_e);
+    }
+    MPI_Barrier(global_comm);
+    
+    // broadcast to the others
+    MPI_Bcast(&ref_clock_time,1,MPI_DOUBLE,masterRank,global_comm);
+    MPI_Bcast(&tr_e.ene[0],3,MPI_DOUBLE,masterRank,global_comm);
+    MPIutils::mpi_broadcast_atom_array(dat,at.get(),masterRank,global_comm);
+    
+    // update lua interface
+    luaItf->set_lua_variable("epot",tr_e.epot());
+    luaItf->set_lua_variable("ekin",tr_e.ekin());
+    luaItf->set_lua_variable("etot",tr_e.etot());
+    luaItf->set_lua_variable("referenceTime",ref_clock_time);
+    
+    // call state_init again now that we are sure to be within a state
+    lua_state_init();
+  }
 
   /*
    * NOTE main loop here
@@ -104,7 +134,7 @@ void ParRep::run()
     MPI_Barrier(global_comm);
 
     MPI_Bcast(&corr_local_time,1,MPI_DOUBLE,masterRank,global_comm);
-    MPIutils::mpi_ibroadcast_atom_array(dat,at.get(),masterRank,global_comm);
+    MPIutils::mpi_broadcast_atom_array(dat,at.get(),masterRank,global_comm);
     MPI_Bcast(&ref_clock_time,1,MPI_DOUBLE,masterRank,global_comm);
     
     // not required on masterRank : provide to openmm coordinates and velocities from decorrelation
@@ -141,7 +171,7 @@ void ParRep::run()
     breakerID = numeric_limits<uint32_t>::max();
     dyna_cycles_done = 0;
       
-    // each rank does its independent dynamics
+    // each rank does its independent dynamics until exit
     do_dynamics();
     
     /*
@@ -151,12 +181,25 @@ void ParRep::run()
     MPI_Allreduce(MPI_IN_PLACE,&breakerID,1,MPI_UINT32_T,
                   MPI_MIN,global_comm);
     
+    // transient propagation if required
+    if(mpi_id_in_gcomm==(int32_t)breakerID)
+    {
+      need_transient_propagation = lua_check_transient();
+      if(need_transient_propagation)
+      {
+        do_transient_propagation(dyna_e);
+        luaItf->set_lua_variable("referenceTime",ref_clock_time);
+      }
+    }
+    MPI_Barrier(global_comm);
+    
     //then broadcast from the breakID rank to all others
+    MPI_Bcast(&ref_clock_time,1,MPI_DOUBLE,masterRank,global_comm);
     MPI_Bcast(&dyna_local_time,1,MPI_DOUBLE,breakerID,global_comm);
     MPI_Bcast(&dyna_e.ene[0],3,MPI_DOUBLE,breakerID,global_comm);
     MPI_Bcast(&dyna_cycles_done,1,MPI_UINT32_T,breakerID,global_comm);
     
-    MPIutils::mpi_ibroadcast_atom_array(dat,at.get(),breakerID,global_comm);
+    MPIutils::mpi_broadcast_atom_array(dat,at.get(),breakerID,global_comm);
     
     /*
      * Calculating the escape time
@@ -183,13 +226,13 @@ void ParRep::run()
     luaItf->set_lua_variable("referenceTime",ref_clock_time);
     
     // save the state and the escape time to the database
-    if(mpi_id_in_gcomm==(int32_t)breakerID)
+    if(i_am_master)
     {
       db_insert(true,t_corr,escape_time);
     }
     
-    // frequent sqlite in-memory db backup to a file
-    if( (ref_clock_time-last_db_backup) > db_backup_frequency_ps )
+    // if necessary db backup is performed
+    if(i_am_master && ((ref_clock_time-last_db_backup) > db_backup_frequency_ps) )
     {
       db_backup();
       last_db_backup = ref_clock_time;
@@ -213,9 +256,12 @@ void ParRep::run()
     
   }while( ref_clock_time < ((double)dat.nsteps * dat.timestep) );
   
-  // backup in-memory database to file before exiting simulation 
-  db_backup();
-  db_close();
+  if(i_am_master)
+  {
+    // backup database to file if required before exiting simulation 
+    db_backup();
+    db_close();
+  }
   
 } // end of function run
 
@@ -248,13 +294,9 @@ void ParRep::do_decorrelation()
 
       left_state = lua_check_state();
 
-      /*
-       * if we find an energy diff larger than an epsilon (e_check),
-       * it means system left the reference state
-       */
       if(left_state)
       {
-        LOG_PRINT(LOG_DEBUG,"Rank %d found a new state during correlation\n",mpi_id_in_gcomm);
+        LOG_PRINT(LOG_DEBUG,"Rank %d left the state during decorrelation\n",mpi_id_in_gcomm);
         
         ref_clock_time += corr_local_time;
         luaItf->set_lua_variable("referenceTime",ref_clock_time);
@@ -264,6 +306,21 @@ void ParRep::do_decorrelation()
         
         // re-initialise local time and set the new reference energy
         corr_local_time = 0.;
+        
+        // if the system is not in a new state, also perform transient propagation
+        if(lua_check_transient())
+        {
+          do_transient_propagation(corr_e);
+          
+          // update lua interface
+          luaItf->set_lua_variable("epot",corr_e.epot());
+          luaItf->set_lua_variable("ekin",corr_e.ekin());
+          luaItf->set_lua_variable("etot",corr_e.etot());
+          luaItf->set_lua_variable("referenceTime",ref_clock_time);
+          
+          // call state_init again now that we are sure to be within a state
+          lua_state_init();
+        }
       }
       
       // check running time and depending on return value perform a backup before exiting

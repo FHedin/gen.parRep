@@ -83,8 +83,8 @@ set(cWarnings "-Wall -Wextra")
 # set(cxxWarnings "-Wall -Wextra -Wformat=2 -Wshadow -Wconversion -Wuseless-cast")
 set(cxxWarnings "-Wall -Wextra")
 
-set(cFeatures   "-fstack-protector-all -fstack-check")
-set(cxxFeatures "-fstack-protector-all -fstack-check")
+# set(cFeatures   "-fstack-protector-all -fstack-check")
+# set(cxxFeatures "-fstack-protector-all -fstack-check")
 
 # enabling -ffast-math may provide extra performance by enabling supplementary vectorization
 #set(cFeatures   "-ffast-math -fopt-info-vec")

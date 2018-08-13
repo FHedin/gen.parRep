@@ -46,16 +46,6 @@ void ParRepFV_multiExits::run()
   // open database of states : saved in memory for performance but regularly backed up to a file in case of crash
   db_open();
   
-  if(i_am_master)
-  {
-    gr = unique_ptr<GelmanRubinAnalysis>(new GelmanRubinAnalysis((uint32_t)mpi_gcomm_size));
-    // register grObservables parsed from lua file
-    for(const pair<GR_function_name,GR_function>& p : gr_functions)
-    {
-      gr->registerObservable(Observable(p.first),grTol);
-    }
-  }
-  
   /*
    * Stage 0 : Equilibrate the system for some steps
    *  and use as reference state at the beginning
@@ -70,7 +60,7 @@ void ParRepFV_multiExits::run()
     }
     MPI_Barrier(global_comm);
     
-    MPIutils::mpi_ibroadcast_atom_array(dat,at.get(),masterRank,global_comm);
+    MPIutils::mpi_broadcast_atom_array(dat,at.get(),masterRank,global_comm);
     
     // not required on masterRank : provide to openmm coordinates and velocites from equilibration
     if(!i_am_master)
@@ -89,6 +79,35 @@ void ParRepFV_multiExits::run()
   
   // after equilibration and before starting parrep algorithm it is time to initialise the Lua code defining a state
   lua_state_init();
+  
+  /*
+   * First be sure that the system is within a metastable state, if not perform transient propagation
+   */
+  bool need_transient_propagation = lua_check_transient();
+  if(need_transient_propagation)
+  {
+    ENERGIES tr_e;
+    
+    if(i_am_master)
+    {
+      do_transient_propagation(tr_e);
+    }
+    MPI_Barrier(global_comm);
+    
+    // broadcast to the others
+    MPI_Bcast(&ref_clock_time,1,MPI_DOUBLE,masterRank,global_comm);
+    MPI_Bcast(&tr_e.ene[0],3,MPI_DOUBLE,masterRank,global_comm);
+    MPIutils::mpi_broadcast_atom_array(dat,at.get(),masterRank,global_comm);
+    
+    // update lua interface
+    luaItf->set_lua_variable("epot",tr_e.epot());
+    luaItf->set_lua_variable("ekin",tr_e.ekin());
+    luaItf->set_lua_variable("etot",tr_e.etot());
+    luaItf->set_lua_variable("referenceTime",ref_clock_time);
+    
+    // call state_init again now that we are sure to be within a state
+    lua_state_init();
+  }
   
   /*
    * NOTE main loop here
@@ -114,17 +133,16 @@ void ParRepFV_multiExits::run()
     luaItf->set_lua_variable("ekin",fv_e.ekin());
     luaItf->set_lua_variable("etot",fv_e.etot());
     luaItf->set_lua_variable("referenceTime",ref_clock_time);
-    
-    // reset GR object before continuing
-    if(i_am_master)
-      gr->reset_all_chains();
 
     /*
      * stage 2 : Run parallel dynamics  with multiple exit events
      */
     dyna_local_time = 0.;
     dyna_e = ENERGIES();
+    
     exit_cfg.clear();
+    exit_cfg.resize(0);
+    exit_cfg.shrink_to_fit();
       
     // each rank does its independent dynamics
     do_dynamics();
@@ -174,10 +192,8 @@ void ParRepFV_multiExits::run()
     LOG_PRINT(LOG_INFO,"Largest escape_time is %.2lf ps, from replica %d\n",max_escape_time.value,max_escape_time.index);
     fprintf(    stdout,"Largest escape_time is %.2lf ps, from replica %d\n",max_escape_time.value,max_escape_time.index);
     
-    ref_clock_time += max_escape_time.value;
+
     int32_t sharing_id = max_escape_time.index;
-    
-    luaItf->set_lua_variable("referenceTime",ref_clock_time);
     
     // save the state and the escape time to the database for each replica that has escaped
     if(exit_cfg.size() > 0)
@@ -210,12 +226,25 @@ void ParRepFV_multiExits::run()
       memcpy(dat.pbc.data(),max_iter->pbc_cfg.data(),sizeof(dat.pbc));
       dyna_local_time = max_iter->time;
       dyna_e = max_iter->e;
+      
+      need_transient_propagation = lua_check_transient();
+      if(need_transient_propagation)
+      {
+        do_transient_propagation(dyna_e);
+        luaItf->set_lua_variable("referenceTime",ref_clock_time);
+      }
     }
+    MPI_Barrier(global_comm);
+    
+    ref_clock_time += max_escape_time.value;
+
     MPI_Bcast(&dyna_local_time,1,MPI_DOUBLE,sharing_id,global_comm);
+    MPI_Bcast(&ref_clock_time,1,MPI_DOUBLE,breakerID,global_comm);
     MPI_Bcast(&(dyna_e.ene[0]),3,MPI_DOUBLE,sharing_id,global_comm);
-    MPIutils::mpi_ibroadcast_atom_array(dat,at.get(),sharing_id,global_comm);
+    MPIutils::mpi_broadcast_atom_array(dat,at.get(),sharing_id,global_comm);
     
     // update lua interface
+    luaItf->set_lua_variable("referenceTime",ref_clock_time);
     luaItf->set_lua_variable("epot",dyna_e.epot());
     luaItf->set_lua_variable("ekin",dyna_e.ekin());
     luaItf->set_lua_variable("etot",dyna_e.etot());
@@ -296,6 +325,13 @@ void ParRepFV_multiExits::do_dynamics_multi_wait()
    */
   vector<int32_t> worker_ranks(num_workers,0);
   for(int32_t i=0; i<num_workers; i++) worker_ranks[i] = i;
+  
+#ifdef PARREP_DEBUG_BUILD
+  LOG_PRINT(LOG_DEBUG,"Initial dump of parallel workers : \n");
+  for(int32_t& i : worker_ranks)
+    LOG_PRINT(LOG_DEBUG,"Worker %d\n",i);
+  LOG_FLUSH_ALL();
+#endif
   
   // create the working group and the working communicator : contain all the ranks at the beginning, and some will be removed later
   MPI_Group working_group = MPI_GROUP_NULL;
@@ -382,6 +418,13 @@ void ParRepFV_multiExits::do_dynamics_multi_wait()
       MPI_Allgather(&send_flag,1,MPI_INT32_T,
                     exiting_ranks.get(),1,MPI_INT32_T,
                     working_comm);
+      
+#ifdef PARREP_DEBUG_BUILD
+      LOG_PRINT(LOG_DEBUG,"Dump of exiting_ranks after %u exits : \n",l_num_exits);
+      for(int32_t i=0; i<num_workers; i++)
+        LOG_PRINT(LOG_DEBUG,"%d\n",exiting_ranks[i]);
+      LOG_FLUSH_ALL();
+#endif
 
       worker_ranks = vector<int32_t>();
 
@@ -394,6 +437,13 @@ void ParRepFV_multiExits::do_dynamics_multi_wait()
       }
       
       num_workers = (int32_t) worker_ranks.size();
+      
+#ifdef PARREP_DEBUG_BUILD
+      LOG_PRINT(LOG_DEBUG,"Dump of parallel workers after %u exits : total size is %d\n",l_num_exits,num_workers);
+      for(int32_t& i : worker_ranks)
+        LOG_PRINT(LOG_DEBUG,"Worker %d\n",i);
+      LOG_FLUSH_ALL();
+#endif
 
       num_exits += l_num_exits;
       

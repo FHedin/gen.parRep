@@ -57,10 +57,11 @@ namespace MPIutils
    * @param at Atomic structure
    * @param mpi_root The root process of the broadcast
    * @param comm The MPI communicator
-   * 
-   * @return Pointer to an array of requests of size 2, for checking completion of the broadcasts of ATOM[] and PBC structs
+   * @param reqA Pointer to a MPI_Request
+   * @param reqB Pointer to a MPI_Request
    */
-  MPI_Request* mpi_ibroadcast_atom_array_nowait(DATA& dat, ATOM at[], const int32_t mpi_root, MPI_Comm& comm);
+  void mpi_ibroadcast_atom_array_nowait(DATA& dat, ATOM at[], const int32_t mpi_root,
+                                        MPI_Comm& comm, MPI_Request* reqA, MPI_Request* reqB);
   
   /**
    * @brief  Function that alters the file name in a unique way when using MPI

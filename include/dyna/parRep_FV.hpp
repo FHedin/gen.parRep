@@ -114,14 +114,7 @@ protected:
    * a vector of the names used for indexing the above defined map
    */
   const std::vector<GR_function_name>& gr_names;
-  
-  /**
-   *  the C++ interface for collecting Gelman-Rubin statistics
-   *  For the moment only rank masterRank will manage it.
-   *  The others regularly send their data (stored in gr_observations) to rank masterRank
-   */
-  std::unique_ptr<GelmanRubinAnalysis> gr = nullptr;
-  
+
   /*
    * DECLARATIONS : parrep simulation split in several methods
    */

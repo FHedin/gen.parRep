@@ -68,7 +68,7 @@ OMM_interface::OMM_interface(DATA& _dat,
   state.getPeriodicBoxVectors(pbc[0],pbc[1],pbc[2]);
   
   memcpy(dat.pbc.data(),pbc.data(),sizeof(pbc));
-   
+  
   // re-seed the integrator
   if(dynamic_cast<OpenMM::LangevinIntegrator*>(integrator.get()))
   {
@@ -96,6 +96,8 @@ OMM_interface::OMM_interface(DATA& _dat,
   dat.natom    = system->getNumParticles();
   dat.timestep = integrator->getStepSize();
 
+  pos = vector<Vec3>(dat.natom);
+  vel = vector<Vec3>(dat.natom);
 }
 
 void OMM_interface::addPlatform(PLATFORMS platformDesired, OpenMM::State& state)
@@ -206,15 +208,15 @@ void OMM_interface::minimiseWithCopy(double tol, uint32_t maxsteps, ENERGIES& en
   
   OpenMM::State state = context->getState(infoMask,true);
   
-  const vector<Vec3> pos(state.getPositions());
-  const vector<Vec3> vel(state.getVelocities());
+  const vector<Vec3> lpos(state.getPositions());
+  const vector<Vec3> lvel(state.getVelocities());
   
   //do minimisation as before and save energies
   minimise(tol,maxsteps,ener);
   
   // restore coordinates
-  context->setPositions(pos);
-  context->setVelocities(vel);
+  context->setPositions(lpos);
+  context->setVelocities(lvel);
   
 }
 
@@ -226,8 +228,8 @@ void OMM_interface::minimiseWithCopy(double tol, uint32_t maxsteps, ENERGIES& en
   
   OpenMM::State state = context->getState(infoMask,true);
   
-  const vector<Vec3> pos(state.getPositions());
-  const vector<Vec3> vel(state.getVelocities());
+  const vector<Vec3> lpos(state.getPositions());
+  const vector<Vec3> lvel(state.getVelocities());
 
   //do minimisation as before and save energies
   minimise(tol,maxsteps,ener);
@@ -245,8 +247,8 @@ void OMM_interface::minimiseWithCopy(double tol, uint32_t maxsteps, ENERGIES& en
   memcpy(&vels_out[0],&min_vel[0],min_vel.size()*sizeof(Vec3));
   
   // restore coordinates
-  context->setPositions(pos);
-  context->setVelocities(vel);
+  context->setPositions(lpos);
+  context->setVelocities(lvel);
   
 }
 
@@ -257,9 +259,7 @@ void OMM_interface::setSimClockTime(double t)
 
 void OMM_interface::setCrdsVels(ATOM at[])
 {
-  vector<Vec3> pos(dat.natom);
-  vector<Vec3> vel(dat.natom);
-  
+
   for (uint32_t n=0; n<dat.natom; n++)
   {
     memcpy(&pos[n],&at[n].crds,sizeof(Vec3));
@@ -305,16 +305,16 @@ void OMM_interface::getState(double* timeInPs, ENERGIES* energies, double* curre
   
   if(wantCrdVels)
   {
-    const vector<Vec3>& pos = state.getPositions();
-    const vector<Vec3>& vel = state.getVelocities();
+    const vector<Vec3>& lpos = state.getPositions();
+    const vector<Vec3>& lvel = state.getVelocities();
     
     state.getPeriodicBoxVectors(pbc[0],pbc[1],pbc[2]);
       
     // copy to C++ struct
     for (uint32_t n=0; n < dat.natom; n++)
     {
-      memcpy(&atoms[n].crds,&pos[n],sizeof(Vec3));
-      memcpy(&atoms[n].vels,&vel[n],sizeof(Vec3));
+      memcpy(&atoms[n].crds,&lpos[n],sizeof(Vec3));
+      memcpy(&atoms[n].vels,&lvel[n],sizeof(Vec3));
     }
     
     memcpy(dat.pbc.data(),pbc.data(),sizeof(pbc));

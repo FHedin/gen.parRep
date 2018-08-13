@@ -125,7 +125,7 @@ void run_simulation(const string& inpf)
   
   MPI_Barrier(MPI_COMM_WORLD);
   
-  // TODO allow here the possibility of other MD engines at some point
+  // TODO here allow possibility of other MD engine when ready
   try
   {
     md =  unique_ptr<MD_interface>(

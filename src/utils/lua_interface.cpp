@@ -70,7 +70,9 @@ void luaInterface::parse_lua_file()
 
   ifs.close();
   
-
+  
+  // TODO remove defaults below and put them instead in register_default_lua_variables()
+  
   // let the sol Lua interface read the whole input script
   lua.script(content);
 
@@ -81,7 +83,7 @@ void luaInterface::parse_lua_file()
   cout << "Parsed max_run_time_hours (or default if missing) : " << pvMap["max_run_time_hours"] << endl;
   cout << "Parsed minutes_to_stop_before_max_run_time (or default if missing) : " << pvMap["minutes_to_stop_before_max_run_time"] << endl;
   
-  // TODO if we allow MD engines other than openMM in the future, changes will come here
+  // TODO allow engine other than openMM
   // get the OpenMM platform name
   pvMap["platform"] = lua["OMMplatform"].get_or(string("AUTO"));
   
@@ -163,7 +165,7 @@ void luaInterface::parse_lua_file()
   pvMap["dbFreq"] = to_string(lua["database"]["backupFrequency"].get_or(500.0));
   
   /*
-   * Parse mandatory lua functions (states definitions)
+   * Parse mandatory lua functions (states definitions, transient propagation)
    */
   sol::optional<ParRep_function_state_init> mandatory_state_init = lua.get<ParRep_function_state_init>("state_init");
   if(mandatory_state_init)
@@ -184,6 +186,17 @@ void luaInterface::parse_lua_file()
   else
   {
     cerr << "Error : cannot find the mandatory 'function check_state_left()' in Lua script !" << endl;
+    MPI_CUSTOM_ABORT_MACRO();
+  }
+  
+  sol::optional<ParRep_function_check_transient> mandatory_check_transient_propagation_required = lua.get<ParRep_function_check_transient>("check_transient_propagation_required");
+  if(mandatory_check_transient_propagation_required)
+  {
+    func_check_transient = mandatory_check_transient_propagation_required.value();
+  }
+  else
+  {
+    cerr << "Error : cannot find the mandatory 'function check_transient_propagation_required()' in Lua script !" << endl;
     MPI_CUSTOM_ABORT_MACRO();
   }
   
@@ -561,9 +574,7 @@ void luaInterface::register_default_lua_functions()
 
 void luaInterface::register_default_lua_variables()
 {
-  
-  lua["restart"] = true;
-  
+
   lua["mpi_rank_id"]    = my_id;
   lua["mpi_num_ranks"]  = num_procs;
   

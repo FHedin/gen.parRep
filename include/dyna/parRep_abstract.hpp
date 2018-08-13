@@ -85,7 +85,8 @@ public:
                  : dat(_dat),at(_at),md(_md),luaItf(_luaItf),
                  params(luaItf->get_parsed_parameters_map()),
                  lua_state_init(luaItf->get_function_state_init()),
-                 lua_check_state(luaItf->get_function_check_state()), 
+                 lua_check_state(luaItf->get_function_check_state()),
+                 lua_check_transient(luaItf->get_function_check_transient()),
                  db_open(luaItf->get_db_open()),
                  db_close(luaItf->get_db_close()),
                  db_insert(luaItf->get_db_insert()),
@@ -116,13 +117,13 @@ public:
                 : dat(_dat),at(_at),md(_md),luaItf(_luaItf),
                 params(luaItf->get_parsed_parameters_map()),
                 lua_state_init(luaItf->get_function_state_init()),
-                lua_check_state(luaItf->get_function_check_state()), 
+                lua_check_state(luaItf->get_function_check_state()),
+                lua_check_transient(luaItf->get_function_check_transient()),
                 db_open(luaItf->get_db_open()),
                 db_close(luaItf->get_db_close()),
                 db_insert(luaItf->get_db_insert()),
                 db_backup(luaItf->get_db_backup())
   {
-    LOG_PRINT(LOG_DEBUG,"Call of the ParRepAbstract ctor with \"ignore_local_setup\" set to %s\n",ignore_local_setup ? "true" : "false");
   }
   
   /**
@@ -152,9 +153,11 @@ protected:
   std::unique_ptr<luaInterface>& luaItf;  ///< The Lua interface
 
   // references to objects used by all parrep variants
-  const lua_ParVal_map& params;                           ///< Map of Lua parameters
-  const ParRep_function_state_init&  lua_state_init;      ///< Lua function for state initialization
-  const ParRep_function_check_state& lua_check_state;     ///< Lua function for state checking
+  const lua_ParVal_map& params;                                 ///< Map of Lua parameters
+  const ParRep_function_state_init&      lua_state_init;        ///< Lua function for state initialization
+  const ParRep_function_check_state&     lua_check_state;       ///< Lua function for state checking
+  const ParRep_function_check_transient& lua_check_transient;   ///< Lua function for state checking
+  
   const SQLiteDB_open&    db_open;                        ///< Lua function for database opening
   const SQLiteDB_close&   db_close;                       ///< Lua function for database closeing
   const SQLiteDB_insert&  db_insert;                      ///< Lua function for database insert
@@ -189,14 +192,11 @@ protected:
   ENERGIES equil_e;               ///< a structure for storing equilibrated energies
 
   // parameters for parallel exit phase
-  double dyna_local_time = 0.; ///< Physical parallel dynamics time
-  ENERGIES dyna_e; ///< for storing parallel dynamics energies
-  uint32_t dyna_cycles_done = 0; ///w to know how many cycles of t_poll steps have been performed in the parallel exit phase
-  /**
-   * for storing the mpi rank id of the exiting replica
-   * defaut to the max possible uint32_t value because we will do a MPI_AllReduce minimum search
-   */
-  uint32_t breakerID = std::numeric_limits<uint32_t>::max();
+  double dyna_local_time = 0.;    ///< Physical parallel dynamics time
+  ENERGIES dyna_e;               ///< for storing parallel dynamics energies
+  uint32_t dyna_cycles_done = 0; ///<to know how many cycles of t_poll steps have been performed in the parallel exit phase
+
+  uint32_t breakerID = std::numeric_limits<uint32_t>::max(); ///< for storing the mpi rank id of the exiting replica : defaut to the max possible uint32_t value because we will do a MPI_AllReduce minimum search
   uint32_t dynamics_check;        ///< frequency (in steps) at which to check if there was a state exit
   double t_poll;                  ///< time intervall (physical units e.g. ps) at which to check if a replica left the current state during the parallel phase
 
@@ -270,6 +270,46 @@ protected:
   }
   
   /**
+   * @brief If the current is outside of any known state,
+   *        propagate it until it enters a new known metstable state.
+   * 
+   * Only one replica does that; then it will broadcast its new reference time and the new system to all the others
+   * 
+   */
+  virtual void do_transient_propagation(ENERGIES& tr_e)
+  {
+    LOG_PRINT(LOG_INFO,"Rank %d performs transient propagation...\n",mpi_id_in_gcomm);
+    fprintf(stdout,    "Rank %d performs transient propagation...\n",mpi_id_in_gcomm);
+    
+    bool need_transient_propagation = false;
+    double time_spent_in_transient_propagation = 0.0;
+    while(true)
+    {
+      md->doNsteps(dynamics_check);
+      time_spent_in_transient_propagation += (double) dynamics_check * dat.timestep;
+      
+      LOG_PRINT(LOG_DEBUG,"Rank %d did %lf ps of transient propagation...\n",mpi_id_in_gcomm,time_spent_in_transient_propagation);
+      fprintf(stdout,     "Rank %d did %lf ps of transient propagation...\n",mpi_id_in_gcomm,time_spent_in_transient_propagation);
+      
+      md->getState(nullptr,&tr_e,nullptr,at.get());
+      luaItf->set_lua_variable("epot",tr_e.epot());
+      luaItf->set_lua_variable("ekin",tr_e.ekin());
+      luaItf->set_lua_variable("etot",tr_e.etot());
+      
+      need_transient_propagation = lua_check_transient();
+      
+      if(!need_transient_propagation)
+        break;
+    }
+    
+    ref_clock_time += time_spent_in_transient_propagation;
+    
+    LOG_PRINT(LOG_INFO,"Rank %d found a new metastable state after %lf ps of transient propagation!\n",mpi_id_in_gcomm,time_spent_in_transient_propagation);
+    fprintf(stdout,    "Rank %d found a new metastable state after %lf ps of transient propagation!\n",mpi_id_in_gcomm,time_spent_in_transient_propagation);
+
+  }
+  
+  /**
    * @brief This performs the parallel dynamics stage ; executed by all ranks at the same time,
    * and stopping as soon as one of them escapes
    */
@@ -279,6 +319,7 @@ protected:
     MPI_Win break_window = MPI_WIN_NULL;
     MPI_Request ibarrier_req = MPI_REQUEST_NULL;
     
+    // NOTE there is an implicit barrier in MPI_Win_create
     MPI_Win_create(&needToBreak,sizeof(bool),sizeof(bool),
                    rma_info,global_comm,&break_window);
     
@@ -309,8 +350,8 @@ protected:
        */
       if(left_state)
       {
-        LOG_PRINT(LOG_INFO,"Rank %d escaped the state after %.2lf ps\n",mpi_id_in_gcomm,dyna_local_time);
-        fprintf(stdout,"Rank %d escaped the state after %.2lf ps\n\n",mpi_id_in_gcomm,dyna_local_time);
+        LOG_PRINT(LOG_INFO,"Rank %d escaped the state after %.2lf ps\n",  mpi_id_in_gcomm,dyna_local_time);
+        fprintf(stdout,    "Rank %d escaped the state after %.2lf ps\n\n",mpi_id_in_gcomm,dyna_local_time);
         
         // if it left the state, save the mpi_id_in_gcomm of this rank and broadcast it later 
         breakerID = (uint32_t) mpi_id_in_gcomm;
@@ -325,14 +366,13 @@ protected:
           if(i == mpi_id_in_gcomm)
             continue;
           
-          MPI_Put(&needToBreak, //const void *origin_addr
+          MPI_Put(&needToBreak,   //const void *origin_addr
                   1,MPI_CXX_BOOL, //int origin_count, MPI_Datatype origin_datatype,
-                  i,0,  // int target_rank, MPI_Aint target_disp,
+                  i,0,            // int target_rank, MPI_Aint target_disp,
                   1,MPI_CXX_BOOL, // int target_count, MPI_Datatype target_datatype,
-                  break_window); // MPI_Win win
+                  break_window);  // MPI_Win win
         }
         MPI_Win_unlock_all(break_window);
-        
       }
       
       // instead use a non blocking barrier and check after the next doNsteps in order to hide the sync cost behind computations
@@ -341,7 +381,7 @@ protected:
       if(needToBreak)
         break;
       
-      LOG_PRINT(LOG_INFO,"Still within the same state after %.2lf ps...\n",dyna_local_time);
+      LOG_PRINT(LOG_INFO,"Still within the same state after %.2lf ps...\n",  dyna_local_time);
       if(LOG_SEVERITY == LOG_DEBUG)
         fprintf(stdout,  "Still within the same state after %.2lf ps...\n\n",dyna_local_time);
       
@@ -356,7 +396,10 @@ protected:
     /*
      * the breaker waits here, the others should arrive as soon has they are notified via needToBreak, which will at most take one more
      * md evaluation (dynamics_check)
+     * 
+     * A wait is required before the barrier from properly releasing memory 
      */
+    MPI_Wait(&ibarrier_req,MPI_STATUS_IGNORE);
     MPI_Barrier(global_comm);
     
     MPI_Win_free(&break_window);
@@ -412,16 +455,17 @@ protected:
   }
   
   /**
-   * @brief If the max allowed running time is almost reached, this is called for performing a proper backup for a later restart
+   * @brief If the max allowed running time is almost reached, this is called for performing a proper file backup
    * 
-   * This virtual implementation is quite limited, there should be a proper override by derived classes
+   * This virtual implementation is quite limited, there may be a proper override by derived classes
    * 
-   * \todo Finish implementation of the backup features
+   * \todo Finish implementation of the backup features here for an eventual restart one day ?
    */
   virtual void doBackupAndExit()
   {
-    LOG_PRINT(LOG_INFO,"Maximum allowed run time was reached, performing data serialization\n");
+    LOG_PRINT(LOG_INFO,"Maximum allowed run time was reached, performing data serialization.\n");
     
+    //  a lot of other things to backup also ...
     db_backup();
     db_close();
     LOG_FLUSH_ALL();

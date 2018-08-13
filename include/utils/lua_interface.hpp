@@ -41,23 +41,45 @@ typedef SOL_FUNCTION SQLiteDB_close;
 typedef SOL_FUNCTION SQLiteDB_insert;
 typedef SOL_FUNCTION SQLiteDB_backup;
 
-// a function initialising, on lua's side, all the state checking code
+/**
+ * @brief a function initialising, on lua's side, all the state checking code
+ */
 typedef SOL_FUNCTION   ParRep_function_state_init;
 
-// a function returning a boolean describing if the system left a given state or not.
-// Definition of the state is handled by the lua function
+/**
+ * @brief a function returning a boolean describing if the system left a given state or not.
+ * Definition of the state is handled by the lua function
+ */
 typedef SOL_FUNCTION   ParRep_function_check_state;
 
-// a function returning a lua table corresponding to an opaque (c++ code shouldn't touch it) serialized representation of the states
+/** @brief a function returning a boolean describing if the system is within ametastable state
+ *  All tests are performed within the lua script
+ *  is true if transient propagation should be performed
+ *  is false otherwise; if the configurational space has been partitionned this is always false
+ */
+typedef SOL_FUNCTION   ParRep_function_check_transient;
+
+/**
+ * @brief a function returning a lua table corresponding to an opaque (c++ code shouldn't touch it) serialized representation of the states
+ */
 typedef SOL_FUNCTION   ParRep_function_get_serialized_state;
-// a function returning pushing to lua a table corresponding to an opaque serialized representation of the states
+
+/**
+ * @brief a function returning pushing to lua a table corresponding to an opaque serialized representation of the states
+ */
 typedef SOL_FUNCTION   ParRep_function_put_serialized_state;
 
-// A function used for Gelman-Rubin statistics should return a double observable, without taking any parameter
-//  indeed, the c++ interface exposes globally some variable to the lua interface that the user can used directly
-//  more details given in the lua input script
-typedef std::string    GR_function_name;
+/**
+ * @brief A function used for Gelman-Rubin statistics should return a double observable, without taking any parameter
+ * indeed, the c++ interface exposes globally some variable to the lua interface that the user can used directly
+ * more details given in the lua input script
+ */
 typedef SOL_FUNCTION   GR_function;
+
+/** 
+ * @brief Simply the name of a GR_function
+ */
+typedef std::string    GR_function_name;
 
 // for defining a map of parsed parameters form the lua script
 typedef std::string LuaParameter;
@@ -66,7 +88,6 @@ typedef std::map<LuaParameter,LuaValue> lua_ParVal_map;
 
 /**
 * @brief This class is in charge of parsing the lua input script, and of bridging C++ and Lua codes together.
-* 
 */
 class luaInterface final
 {
@@ -120,6 +141,13 @@ public:
   * @return the reference to the function
   */
   const ParRep_function_check_state& get_function_check_state() const {return func_check_state;}
+  
+  /**
+   * @brief Returns a const reference to the Lua function checking if transient propagation is required
+   * 
+   * @return the reference to the function
+   */
+  const ParRep_function_check_state& get_function_check_transient() const {return func_check_transient;}
   
   /**
   * @brief Returns a const reference to the Lua function for obtaining from Lua a serialized state
@@ -228,8 +256,9 @@ private:
   SQLiteDB_insert   db_insert;    ///< function to Lua SQLite insert function
   SQLiteDB_backup   db_backup;    ///< function to Lua SQLite backup function
   
-  ParRep_function_state_init  func_state_init;    ///< Lua function initialising state definition
-  ParRep_function_check_state func_check_state;   ///< Lua function checking state status
+  ParRep_function_state_init      func_state_init;      ///< Lua function initialising state definition
+  ParRep_function_check_state     func_check_state;     ///< Lua function checking state status
+  ParRep_function_check_transient func_check_transient; ///< Lua function checking if transient propagation is required
   
   ParRep_function_get_serialized_state func_get_serialized_state;   ///< Lua function for getting from Lua a serialized state
   ParRep_function_put_serialized_state func_put_serialized_state;   ///< Lua function for putting to Lua a serialized state

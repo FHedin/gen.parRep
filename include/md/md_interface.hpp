@@ -94,12 +94,14 @@ public:
    * @brief Update coordinates and velocities : from main code to MD engine
    * 
    * @param at  Atomic system
+   * @param dat Simulation parameters
    */
   virtual void setCrdsVels(ATOM at[]) = 0;
   
   /**
    * @brief Generate a new boltzmann distribution for velocities, for a given temperature
    * 
+   * @param dat Simulation parameters
    */
   virtual void randomiseVelocities() = 0;
   
@@ -111,6 +113,7 @@ public:
    * @param energies pointer where to store energies, or nullptr
    * @param currentTemperature pointer where to store temperature, or nullptr
    * @param atoms Atomic system coordinates, or nullptr
+   * @param dat Simulation parameters
    */
   virtual void getState(double* timeInPs, ENERGIES* energies,
                         double* currentTemperature, ATOM atoms[]) = 0;
