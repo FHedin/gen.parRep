@@ -38,7 +38,7 @@ You need an MPI development framework installed, compatible with the MPI 3.0 or 
   * Open MPI 1.10.2 (from Ubuntu 16.04 repositories)
 CMake will try to locate it automatically.
 
-You will need to Download and/or Compile the OpenMM library, a required dependancy : 
+You will need to Download and/or Compile the OpenMM library, a required dependency : 
   * see https://simtk.org/home/openmm
   * and/or https://github.com/pandegroup/openmm
   * tested with version 7.0 to 7.2 (manually compiled and installed)
@@ -140,4 +140,20 @@ For example for a custom installation in /home/$USER/bin/openmm
 
 For setting the amount of cpu threads used by each MPI process use the following env. variable :
   * export OPENMM_CPU_THREADS=1
+
+----------------------------------------------
+## Directory structure
+----------------------------------------------
+
+**src** and **include** -> contains the C++ source and headers of the gen.parRep software.
+
+**external** -> contains source and headers of dependencies used by the gen.parRep software.
+
+**cmake** -> contains files required for locating external packages (e.g. OpenMM and a MPI implementation).
+
+**docs** -> contains files required for building the documentation using Doxygen.
+
+**mol** -> contains ready to use test systems, i.e. input files and OpenMM configurations of various molecular systems.
+
+**run** -> contains bash scripts demonstrating how to run the software using either mpirun or the SLURM scheduler; also contains three bash files for runing the software under the following debuggers/profilers: GDB, Valgrind and Scalasca.
 
