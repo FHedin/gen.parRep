@@ -11,10 +11,12 @@
 #include <iostream>
 #include <sstream>
 #include <chrono>
+#include <exception>
 
 #include "runSim.hpp"
 
 #include "logger.hpp"
+
 #include "md_interface.hpp"
 #include "omm_interface.hpp"
 
@@ -26,30 +28,7 @@
 
 #include "mpi_utils.hpp"
 
-// GCC / G++ only
-#ifdef __GNUC__
-
-#include <execinfo.h>
-
-/* Obtain a backtrace and print it to stdout. */
-static void print_trace()
-{
-  void *array[200];
-  int size;
-  char **strings;
-  
-  size = backtrace(array, 10);
-  strings = backtrace_symbols(array, size);
-  
-  LOG_PRINT(LOG_ERROR,"Obtained %zd stack frames.\n", size);
-  
-  for (int i = 0; i < size; i++)
-    LOG_PRINT(LOG_ERROR,"%s\n", strings[i]);
-  
-  free (strings);
-}
-
-#endif
+#include "rand.hpp"
 
 using namespace std;
 
@@ -60,6 +39,31 @@ void run_simulation(const string& inpf)
   int32_t num_procs = -1;
   MPI_Comm_rank(MPI_COMM_WORLD, &my_id);
   MPI_Comm_size(MPI_COMM_WORLD, &num_procs);
+  
+  /*
+   * Each MPI rank will initialise its own random numbers generator ; see rand.hpp
+   */
+  init_rand();
+  
+  /*
+   * This is how to initialize the random generators providing seeds manually (at least 5 seeds of type uint64_t encodes as a comma separated string)
+   * 
+   * ATTENTION Using the directly the following line would be wrong because all the random generators on all
+   *           MPI ranks would be initialised with the same seeds !!! Each rank should use a modified vrsion of those seeds.
+   * 
+   *   const string ten_seeds = "12813764096581876017,1660537369292506360,10652021971297968194,"
+   *    "1632182917282226681,2681620832946811191,11894265520984226376,"
+   *    "8987030001799979889,7928564290642933391,6948006017539476486,1814061233159141676";
+   * 
+   *    init_rand(ten_seeds);
+   * 
+   */
+
+  fprintf(stdout,"Rank %d properly initialised its mt19937 random numbers generator\n",my_id);
+  fprintf(stdout,"5 random uint32_t from rank %d : %u %u %u %u %u\n",my_id,get_uint32(),
+          get_uint32(),get_uint32(),get_uint32(),get_uint32());
+  
+  MPI_Barrier(MPI_COMM_WORLD);
   
   // stores simulation parameters
   DATA dat;
@@ -81,10 +85,9 @@ void run_simulation(const string& inpf)
   }
   catch(exception& e)
   {
-    fprintf(stderr,"std::exception captured when initialising Lua interface ! See error log file for more details.\n");
-    LOG_PRINT(LOG_ERROR,"A std::exception has been emmited on rank %d when initialising the Lua interface.\n",my_id);
-    LOG_PRINT(LOG_ERROR,"Error message is : %s\n",e.what());
-    LOG_PRINT(LOG_ERROR,"Now flushing files and terminating all other MPI jobs...\n");
+    fprintf(stderr,"std::exception captured on rank %d when initialising Lua interface !\n",my_id);
+    fprintf(stderr,"Error message is : %s\n",e.what());
+    fprintf(stderr,"Now flushing files and terminating all other MPI ranks...\n");
     LOG_FLUSH_ALL();
     MPI_CUSTOM_ABORT_MACRO();
   }
@@ -96,10 +99,9 @@ void run_simulation(const string& inpf)
   }
   catch(exception& e)
   {
-    fprintf(stderr,"std::exception captured when parsing Lua input file ! See error log file for more details.\n");
-    LOG_PRINT(LOG_ERROR,"A std::exception has been emmited on rank %d when parsing the Lua input file.\n",my_id);
-    LOG_PRINT(LOG_ERROR,"Error message is : %s\n",e.what());
-    LOG_PRINT(LOG_ERROR,"Now flushing files and terminating all other MPI jobs...\n");
+    fprintf(stderr,"std::exception captured on rank %d when parsing the Lua input file !\n",my_id);
+    fprintf(stderr,"Error message is : %s\n",e.what());
+    fprintf(stderr,"Now flushing files and terminating all other MPI ranks...\n");
     LOG_FLUSH_ALL();
     MPI_CUSTOM_ABORT_MACRO();
   }
@@ -112,58 +114,63 @@ void run_simulation(const string& inpf)
   
   dat.minutes_to_stop_before_max_run_time = chrono::minutes(stoul(luaParams.at("minutes_to_stop_before_max_run_time")));
   
-  // get desired OpenMM platform
-  string platform =   luaParams.at("platform");
-  
-  // get the number of steps of simulation to perform with openmm ; unsigned 64 bits for allowing theoretically more than 2 billions
+  // get the number of steps of simulation to perform with MD engine ; unsigned 64 bits for allowing theoretically more than 2 billions
   dat.nsteps = stoul(luaParams.at("numSteps"));
-  
-  // get paths to OMM XML serialised files
-  string integrator = luaParams.at("integrator");
-  string system =     luaParams.at("system");
-  string state =      luaParams.at("state");
   
   MPI_Barrier(MPI_COMM_WORLD);
   
-  // TODO here allow possibility of other MD engine when ready
+  // First retrieve the type of MD engine from the Lua input file
+  const string required_engine_name = luaParams.at("MD_Engine");
+  
+  MD_ENGINES md_engine_type = MD_ENGINES::UNKNOWN_ENGINE;
+  if(required_engine_name == "OpenMM")
+    md_engine_type = MD_ENGINES::OPENMM;
+  else
+    md_engine_type = MD_ENGINES::UNKNOWN_ENGINE;
+  
+  fprintf(stdout,    "User required to perform simulation using the '%s' MD engine.\n",required_engine_name.c_str());
+  LOG_PRINT(LOG_INFO,"User required to perform simulation using the '%s' MD engine.\n",required_engine_name.c_str());
+  
+  // then call the appropriate class constructor depending on the type of parsed MD engine
   try
   {
-    md =  unique_ptr<MD_interface>(
-      OMM_interface::initialise_fromSerialization(dat,
-                                                  system,
-                                                  integrator,
-                                                  state,
-                                                  platform)
-    );
+    switch(md_engine_type)
+    {
+      case MD_ENGINES::OPENMM :
+        md =  unique_ptr<MD_interface>( OMM_interface::initialise_fromSerialization(dat,luaItf) );
+      break;
+      
+      case MD_ENGINES::UNKNOWN_ENGINE:
+        throw runtime_error("The MD engine was set to the default error type 'MD_ENGINES::UNKNOWN_ENGINE'\n");
+        break;
+    }
   }
   catch(exception& e)
   {
-    fprintf(stderr,"std::exception captured when initialising OpenMM simulation ! See error log file for more details.\n");
-    LOG_PRINT(LOG_ERROR,"A std::exception has been emmited on rank %d.\n",my_id);
-    LOG_PRINT(LOG_ERROR,"Error message is : %s\n",e.what());
-    #ifdef __GNUC__
-    print_trace();
-    #endif
-    LOG_PRINT(LOG_ERROR,"Now flushing files and terminating all other MPI jobs...\n");
+    fprintf(stderr,"std::exception captured on rank %d when initialising the MD engine !\n",my_id);
+    fprintf(stderr,"Error message is : %s\n",e.what());
+    fprintf(stderr,"Now flushing files and terminating all other MPI ranks...\n");
     LOG_FLUSH_ALL();
     MPI_CUSTOM_ABORT_MACRO();
   }
-
-  // dat.natom, dat.timestep, dat.T are read from OMM xml files
-  // we redefine them back to lua
+  
+  MPI_Barrier(MPI_COMM_WORLD);
+  
+  // from this point we can allocate the c++ side storage for atom crds and vels
+  atmList = unique_ptr<ATOM[]>(new ATOM[dat.natom]);
+  
+  // copy back initial configuration from MD engine to the ATOM[] storage ; also get initial temperature and energies
+  ENERGIES iniE;
+  md->getSimData(nullptr,&iniE,&(dat.T),atmList.get());
+  // getParticlesParams(...) allows us to also retrieve the atomic mass
+  md->getParticlesParams(atmList.get());
+  
+  // export back to lua dat.natom, dat.timestep, dat.T
   luaItf->set_lua_variable("natoms",dat.natom);
   luaItf->set_lua_variable("timeStep",dat.timestep);
   luaItf->set_lua_variable("temperature",dat.T);
-    
-  // from this point system was unserialised and we know the number of atoms : allocate memory
-  atmList = unique_ptr<ATOM[]>(new ATOM[dat.natom]);
   
-  // copy back initial OpenMM configuration to the ATOM[] ; also get initial temperature (may fluctuate)
-  ENERGIES iniE;
-  md->getState(nullptr,&iniE,&(dat.T),atmList.get());
-  md->getParticlesParams(atmList.get());
-  
-  // push to Lua some initial value for global variables
+  // push to Lua some initial value for energy and physical time
   luaItf->set_lua_variable("epot",iniE.epot());
   luaItf->set_lua_variable("ekin",iniE.ekin());
   luaItf->set_lua_variable("etot",iniE.etot());
@@ -176,9 +183,6 @@ void run_simulation(const string& inpf)
   fprintf(stdout,"\nStarting program with %d MPI ranks\n\n",num_procs);
   
   fprintf(stdout,"This is : rank[%d]\n\n",my_id);
-  
-  const string& ommVersion = OMM_interface::getOMMversion();
-  fprintf(stdout,"Using OpenMM toolkit version '%s'\n",ommVersion.c_str());
 
   MPI_Barrier(MPI_COMM_WORLD);
   
@@ -208,13 +212,9 @@ void run_simulation(const string& inpf)
   }
   catch(exception& e)
   {
-    fprintf(stderr,"std::exception captured when creating PARREP_SIMULATION object ! See error log file for more details.\n");
-    LOG_PRINT(LOG_ERROR,"An std::exception has been emmited on rank %d.\n",my_id);
-    LOG_PRINT(LOG_ERROR,"Error message is : %s\n",e.what());
-    #ifdef __GNUC__
-    print_trace();
-    #endif
-    LOG_PRINT(LOG_ERROR,"Now flushing files and terminating all other MPI jobs...\n");
+    fprintf(stderr,"std::exception captured on rank %d when creating PARREP_SIMULATION object !\n",my_id);
+    fprintf(stderr,"Error message is : %s\n",e.what());
+    fprintf(stderr,"Now flushing files and terminating all other MPI ranks...\n");
     LOG_FLUSH_ALL();
     MPI_CUSTOM_ABORT_MACRO();
   }
@@ -225,13 +225,9 @@ void run_simulation(const string& inpf)
   }
   catch(exception& e)
   {
-    fprintf(stderr,"std::exception captured when running simulation ! See error log file for more details.\n");
-    LOG_PRINT(LOG_ERROR,"An std::exception has been emmited on rank %d.\n",my_id);
-    LOG_PRINT(LOG_ERROR,"Error message is : %s\n",e.what());
-    #ifdef __GNUC__
-    print_trace();
-    #endif
-    LOG_PRINT(LOG_ERROR,"Now flushing files and terminating all other MPI jobs...\n");
+    fprintf(stderr,"std::exception captured on rank %d when running simulation !\n",my_id);
+    fprintf(stderr,"Error message is : %s\n",e.what());
+    fprintf(stderr,"Now flushing files and terminating all other MPI ranks...\n");
     LOG_FLUSH_ALL();
     MPI_CUSTOM_ABORT_MACRO();
   }

@@ -10,13 +10,12 @@
 #include <iostream>
 #include <fstream>
 #include <chrono>
+#include <exception>
 
 #include "sol.hpp"
 #include "rand.hpp"
 #include "logger.hpp"
-
 #include "lua_interface.hpp"
-
 #include "omm_interface.hpp"
 
 #include "mpi_utils.hpp"
@@ -67,11 +66,7 @@ void luaInterface::parse_lua_file()
   
   content = string( (istreambuf_iterator<char>(ifs) ),
                     (istreambuf_iterator<char>()  ) );
-
   ifs.close();
-  
-  
-  // TODO remove defaults below and put them instead in register_default_lua_variables()
   
   // let the sol Lua interface read the whole input script
   lua.script(content);
@@ -80,83 +75,40 @@ void luaInterface::parse_lua_file()
   pvMap["max_run_time_hours"]                  = to_string(lua["max_run_time_hours"].get_or(24.0));
   pvMap["minutes_to_stop_before_max_run_time"] = to_string(lua["minutes_to_stop_before_max_run_time"].get_or(5));
   
-  cout << "Parsed max_run_time_hours (or default if missing) : " << pvMap["max_run_time_hours"] << endl;
-  cout << "Parsed minutes_to_stop_before_max_run_time (or default if missing) : " << pvMap["minutes_to_stop_before_max_run_time"] << endl;
+  fprintf(stdout,"Parsed max_run_time_hours (or default if missing) : %s\n",
+          pvMap["max_run_time_hours"].c_str());
+  fprintf(stdout,"Parsed minutes_to_stop_before_max_run_time (or default if missing) : %s\n",
+          pvMap["minutes_to_stop_before_max_run_time"].c_str());
   
-  // TODO allow engine other than openMM
-  // get the OpenMM platform name
-  pvMap["platform"] = lua["OMMplatform"].get_or(string("AUTO"));
-  
-  string& p = pvMap["platform"];
-  if(p=="AUTO")
+  // check the type of MD engine used by simulation and parse the appropriate parameters from here
+  const string md_engine_name = lua["MD_Engine"].get_or(string("Unknown"));
+  if(md_engine_name == "OpenMM")
   {
+    pvMap["MD_Engine"] = "OpenMM";
+    parse_omm_params();
   }
-  else if(p == "REF")
-    p = OMM_interface::omm_platforms_names.at(PLATFORMS::REF);
-  else if(p == "CPU")
-    p = OMM_interface::omm_platforms_names.at(PLATFORMS::CPU);
-  else if(p == "OCL")
-    p = OMM_interface::omm_platforms_names.at(PLATFORMS::OCL);
-  else if(p == "CUDA")
-    p = OMM_interface::omm_platforms_names.at(PLATFORMS::CUDA);
+  /* 
+   * // NOTE add here (before the error else) compatibility for other engines
+   * 
+   * else if(md_engine_name == "...")
+   * {}
+   */
   else
   {
-    cerr << "Error when parsing OMM platform : '" << p <<"' is not a valid platform type !" << endl;
-    MPI_CUSTOM_ABORT_MACRO();
+    throw runtime_error("Error when attempting to read the mandatory parameter 'MD_Engine' from the Lua file : engine type '"
+                        + md_engine_name + "' is not supported !! \n");
   }
-  
-  cout << "Parsed OMM platform (or default if missing) : " << pvMap["platform"] << endl;
-  
-  // read the paths to the serialised OpenMM files
-  sol::optional<string> integrator_path = lua["integrator"]["xml"];
-  sol::optional<string> system_path     = lua["system"]["xml"];
-  sol::optional<string> state_path      = lua["state"]["xml"];
-  
-  // handle errors
-  if(integrator_path)
-  {
-    pvMap["integrator"] = integrator_path.value();
-    cout << "Parsed integrator file : " << pvMap["integrator"] << endl;
-  }
-  else
-  {
-    cerr << "Error when reading integrator file name !" << endl;
-    MPI_CUSTOM_ABORT_MACRO();
-  }
-  
-  if(system_path)
-  {
-    pvMap["system"] = system_path.value();
-    cout << "Parsed system file : " << pvMap["system"] << endl;
-  }
-  else
-  {
-    cerr << "Error when reading system file name !" << endl;
-    MPI_CUSTOM_ABORT_MACRO();
-  }
-  
-  if(state_path)
-  {
-    pvMap["state"] = state_path.value();
-    cout << "Parsed state file : " << pvMap["state"] << endl;
-  }
-  else
-  {
-    cerr << "Error when reading state file name !" << endl;
-    MPI_CUSTOM_ABORT_MACRO();
-  }
-  
+
   // get total number of steps for this simulation
   sol::optional<uint64_t> numSteps = lua["numSteps"];
   if(numSteps)
   {
     pvMap["numSteps"] = lua["numSteps"];
-    cout << "Parsed numSteps : " << pvMap["numSteps"] << endl;
+    fprintf(stdout,"Parsed numSteps : %s\n",pvMap["numSteps"].c_str());
   }
   else
   {
-    cerr << "Error when reading number of steps !" << endl;
-    MPI_CUSTOM_ABORT_MACRO();
+    throw runtime_error("Error when attempting to retrieve the mandatory parameter 'numSteps' from the Lua file !\n");
   }
 
   pvMap["equilibrationSteps"] = to_string(lua["equilibrationSteps"].get_or(50e3));
@@ -174,8 +126,7 @@ void luaInterface::parse_lua_file()
   }
   else
   {
-    cerr << "Error : cannot find the mandatory 'function state_init()' in Lua script !" << endl;
-    MPI_CUSTOM_ABORT_MACRO();
+    throw runtime_error("Error when attempting to retrieve the mandatory function 'state_init()' from the Lua file !\n");
   }
     
   sol::optional<ParRep_function_check_state> mandatory_check_state_left = lua.get<ParRep_function_check_state>("check_state_left");
@@ -185,8 +136,7 @@ void luaInterface::parse_lua_file()
   }
   else
   {
-    cerr << "Error : cannot find the mandatory 'function check_state_left()' in Lua script !" << endl;
-    MPI_CUSTOM_ABORT_MACRO();
+    throw runtime_error("Error when attempting to retrieve the mandatory function 'check_state_left()' from the Lua file !\n");
   }
   
   sol::optional<ParRep_function_check_transient> mandatory_check_transient_propagation_required = lua.get<ParRep_function_check_transient>("check_transient_propagation_required");
@@ -196,12 +146,11 @@ void luaInterface::parse_lua_file()
   }
   else
   {
-    cerr << "Error : cannot find the mandatory 'function check_transient_propagation_required()' in Lua script !" << endl;
-    MPI_CUSTOM_ABORT_MACRO();
+    throw runtime_error("Error when attempting to retrieve the mandatory function 'check_transient_propagation_required()' from the Lua file !\n");
   }
   
   /*
-   * more parsing for parRep parameters
+   * more parsing of simulation parameters
    */
   // first need to know if std parRep or FV parRep are used
   sol::optional<string> algo_type = lua["simulation"]["algorithm"];
@@ -211,18 +160,17 @@ void luaInterface::parse_lua_file()
   }
   else
   {
-    cerr << "Error when reading type of algorithm for section 'simulation' !" << endl;
-    MPI_CUSTOM_ABORT_MACRO();
+    throw runtime_error("Error when reading type of algorithm for section 'simulation' !\n");
   }
 
   if(pvMap["algorithm"] == "PARREP")
   {
-    cout << "Parsing ParRep simulation parameters." << endl;
+    fprintf(stdout,"Parsing ParRep simulation parameters.");
     parse_parrep_params();
   }
   else if(pvMap["algorithm"] == "PARREP_FV")
   {
-    cout << "Parsing ParRep FV simulation parameters." << endl;
+    fprintf(stdout,"Parsing ParRep FV simulation parameters.");
     parse_parrepFV_params();
     
     uint32_t num_ex_events = (uint32_t) stoul(pvMap.at("allowedExitEvents"));
@@ -236,8 +184,7 @@ void luaInterface::parse_lua_file()
       }
       else
       {
-        cerr << "Error : cannot find the mandatory 'function get_serialized_state()' in Lua script !" << endl;
-        MPI_CUSTOM_ABORT_MACRO();
+        throw runtime_error("Error : cannot find the mandatory 'function get_serialized_state()' in Lua script !\n");
       }
       
       sol::optional<ParRep_function_put_serialized_state> mandatory_put_serialized_state = lua.get<ParRep_function_put_serialized_state>("put_serialized_state");
@@ -247,8 +194,7 @@ void luaInterface::parse_lua_file()
       }
       else
       {
-        cerr << "Error : cannot find the mandatory 'function put_serialized_state()' in Lua script !" << endl;
-        MPI_CUSTOM_ABORT_MACRO();
+        throw runtime_error("Error : cannot find the mandatory 'function put_serialized_state()' in Lua script !\n");
       }
     }
     else
@@ -263,8 +209,7 @@ void luaInterface::parse_lua_file()
   }
   else
   {
-    cerr << "Error when reading type of algorithm : " << pvMap["algorithm"] << " is not a valid type of algortihm ! " << endl;
-    MPI_CUSTOM_ABORT_MACRO();
+    throw runtime_error("Error when reading the type of algorithm :" + pvMap["algorithm"] + " is not a valid type of algortihm !\n");
   }
   
   // get database interface lua functions
@@ -286,7 +231,6 @@ void luaInterface::register_default_lua_functions()
   lua.set_function("exit_from_lua",
                    []()
                    {
-                     LOG_FLUSH_ALL();
                      MPI_CUSTOM_ABORT_MACRO();
                    }
   );
@@ -529,40 +473,54 @@ void luaInterface::register_default_lua_functions()
                      return ENETuple(minE.epot(),minE.ekin(),minE.etot());
                    }
   );
+  
+  // returns energy contribution 
+  lua.set_function("get_group_epot",[&](int32_t groups) -> double
+                                    {
+                                      if(md->engine_supports_groups_splitting()==false)
+                                      {
+                                        runtime_error ex("Lua script called get_group_energy(...) but it seems that the currently active MD engine does not support the group splitting feature ! Aborting program, please fix your input file accordingly...");
+                                        throw ex;
+                                      }
+                                      ENERGIES e;
+                                      md->getSimData(nullptr,&e,nullptr,nullptr,groups);
+                                      return e.epot();
+                                    }
+  );
 
   // perform energy minimisation, and return the coordinates and velocities
   lua.set_function("get_minimised_crdvels",
                    [&](double tolerance, uint32_t maxSteps) -> SolTabl2Tuple
-                  {
-                    ENERGIES minE;
-                    vector<XYZ> coordinates;
-                    vector<XYZ> velocities;
+                   {
+                     ENERGIES minE;
+                     vector<XYZ> coordinates;
+                     vector<XYZ> velocities;
 
-                    md->minimiseWithCopy(tolerance,maxSteps,minE,coordinates,velocities);
+                     md->minimiseWithCopy(tolerance,maxSteps,minE,coordinates,velocities);
 
-                    sol::table crds = lua.create_table();
-                    crds["x"] = lua.create_table();
-                    crds["y"] = lua.create_table();
-                    crds["z"] = lua.create_table();
+                     sol::table crds = lua.create_table();
+                     crds["x"] = lua.create_table();
+                     crds["y"] = lua.create_table();
+                     crds["z"] = lua.create_table();
                     
-                    sol::table vels = lua.create_table();
-                    vels["x"] = lua.create_table();
-                    vels["y"] = lua.create_table();
-                    vels["z"] = lua.create_table();
+                     sol::table vels = lua.create_table();
+                     vels["x"] = lua.create_table();
+                     vels["y"] = lua.create_table();
+                     vels["z"] = lua.create_table();
                     
-                    for(uint32_t i=1; i<=dat.natom; i++)
-                    {
-                      crds["x"][i] = coordinates[i-1][0];
-                      crds["y"][i] = coordinates[i-1][1];
-                      crds["z"][i] = coordinates[i-1][2];
-                      
-                      vels["x"][i] = velocities[i-1][0];
-                      vels["y"][i] = velocities[i-1][1];
-                      vels["z"][i] = velocities[i-1][2];
-                    }
+                     for(uint32_t i=1; i<=dat.natom; i++)
+                     {
+                       crds["x"][i] = coordinates[i-1][0];
+                       crds["y"][i] = coordinates[i-1][1];
+                       crds["z"][i] = coordinates[i-1][2];
+                       
+                       vels["x"][i] = velocities[i-1][0];
+                       vels["y"][i] = velocities[i-1][1];
+                       vels["z"][i] = velocities[i-1][2];
+                     }
 
-                    return SolTabl2Tuple(crds,vels);
-                  }
+                     return SolTabl2Tuple(crds,vels);
+                   }
 );
   
   // get the current temperature (from kinetic energy)
@@ -601,34 +559,99 @@ void luaInterface::register_default_lua_variables()
   
   // expose dummy lambda functions ; they do nothing
   //  and are the default in case the user does not override them in the lua script
-  lua["SQLiteDB"]["open"].set_function(
-    []()->void
-    {
-      cerr << "Dummy lambda db_open\n";
-    }
-  );
+  lua["SQLiteDB"]["open"].set_function([](){fprintf(stderr,"Dummy lambda db_open\n");});
   
-  lua["SQLiteDB"]["close"].set_function(
-    []()->void
-    {
-      cerr << "Dummy lambda db_close\n";
-    }
-  );
+  lua["SQLiteDB"]["close"].set_function([](){fprintf(stderr,"Dummy lambda db_close\n");});
   
-  lua["SQLiteDB"]["insert_state"].set_function(
-    []()->void
-    {
-      cerr << "Dummy lambda db_insert\n";
-    }
-  );
+  lua["SQLiteDB"]["insert_state"].set_function([](){fprintf(stderr,"Dummy lambda db_insert\n");});
   
-  lua["SQLiteDB"]["backup_to_file"].set_function(
-    []()->void
-    {
-      cerr << "Dummy lambda db_backup\n";
-    }
-  );
+  lua["SQLiteDB"]["backup_to_file"].set_function([](){fprintf(stderr,"Dummy lambda db_backup\n");});
   
+}
+
+void luaInterface::parse_omm_params()
+{
+  // get the OpenMM platform name
+  pvMap["platform"] = lua["OMMplatform"].get_or(string("AUTO"));
+  
+  string& p = pvMap["platform"];
+  if(p=="AUTO")
+  {
+  }
+  else if(p == "REF")
+    p = OMM_interface::omm_platforms_names.at(PLATFORMS::REF);
+  else if(p == "CPU")
+    p = OMM_interface::omm_platforms_names.at(PLATFORMS::CPU);
+  else if(p == "OCL")
+    p = OMM_interface::omm_platforms_names.at(PLATFORMS::OCL);
+  else if(p == "CUDA")
+    p = OMM_interface::omm_platforms_names.at(PLATFORMS::CUDA);
+  else
+  {
+    throw runtime_error(string("Error when parsing OMM platform : '" + p + "' is not a valid platform type !"));
+  }
+  
+  fprintf(stdout,"Parsed OMM platform (or default if missing) : %s\n",pvMap["platform"].c_str());
+  
+  // read the paths to the serialised OpenMM files
+  sol::optional<string> integrator_path = lua["integrator"]["xml"];
+  sol::optional<string> system_path     = lua["system"]["xml"];
+  sol::optional<string> state_path      = lua["state"]["xml"];
+  
+  // handle errors
+  if(integrator_path)
+  {
+    pvMap["integrator"] = integrator_path.value();
+    fprintf(stdout,"Parsed integrator file : %s\n",pvMap["integrator"].c_str());
+  }
+  else
+  {
+    throw runtime_error("Error when attempting to retrieve the mandatory OMM parameter 'integrator' from the Lua file !\n");
+  }
+  
+  if(system_path)
+  {
+    pvMap["system"] = system_path.value();
+    fprintf(stdout,"Parsed system file : %s\n",pvMap["system"].c_str());
+  }
+  else
+  {
+    throw runtime_error("Error when attempting to retrieve the mandatory OMM parameter 'system' from the Lua file !\n");
+  }
+  
+  if(state_path)
+  {
+    pvMap["state"] = state_path.value();
+    fprintf(stdout,"Parsed state file : %s\n",pvMap["state"].c_str());
+  }
+  else
+  {
+    throw runtime_error("Error when attempting to retrieve the mandatory OMM parameter 'state' from the Lua file !\n");
+  }
+  
+  // if defined, retrieved the Openm platform properties
+  sol::optional<sol::table> platf_props = lua["OMMplatform_properties"];
+  if(platf_props)
+  {
+    sol::table props = platf_props.value();
+    
+    props.for_each([&](sol::object const& key, sol::object const& value)
+    {
+      omm_props[key.as<string>()] = value.as<string>();
+    }
+    );
+    
+    fprintf(stdout,"Found %zu user defined key-value records in the OpenMM platform properties table : \n",props.size());
+    for(auto& kv : omm_props)
+    {
+      fprintf(stdout,"\t %s --> %s\n",kv.first.c_str(),kv.second.c_str());
+    }
+    
+  }
+  else
+  {
+    fprintf(stdout,"No specific OpenMM platform properties defined by the user...");
+  }
 }
 
 void luaInterface::parse_parrep_params()
@@ -658,6 +681,7 @@ void luaInterface::parse_parrepFV_params()
   
   pvMap["checkFV"] = to_string(simulation_def["checkFV"].get_or(100));
   pvMap["checkGR"] = to_string(simulation_def["checkGR"].get_or(1));
+  pvMap["minAccumulatedObs"] = to_string(simulation_def["minAccumulatedObs"].get_or(100));
   pvMap["checkDynamics"] = to_string(simulation_def["checkDynamics"].get_or(100));
   
   sol::optional<sol::table> gr_functions_list = simulation_def.get<sol::table>("GRobservables");
@@ -667,7 +691,7 @@ void luaInterface::parse_parrepFV_params()
     for(size_t n=1; n<=tab.size(); n++)
     {
       const GR_function_name fname = tab[n];
-      cout << "Found a GR function declaration : " << fname << endl;
+      fprintf(stdout,"Found a GR function declaration : %s\n",fname.c_str());
       gr_funcs_names.push_back(fname);
       GR_function f = lua.get<GR_function>(fname);
       gr_funcs[fname] = f;
@@ -675,8 +699,7 @@ void luaInterface::parse_parrepFV_params()
   }
   else
   {
-    cerr << "Error when trying to read simulation.GRobservables which is required for a 'parrepFV' simulation !" << endl;
-    MPI_CUSTOM_ABORT_MACRO();
+    throw runtime_error( "Error when trying to read simulation.GRobservables which is required for a 'parrepFV' simulation !\n");
   }
   
   pvMap["GRtol"] = to_string(simulation_def["GRtol"].get_or(0.01));

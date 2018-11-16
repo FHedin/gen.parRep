@@ -1,5 +1,5 @@
 ----------------------------------------------
-# gen.parRep 
+# gen.parRep (v1.1)
 ----------------------------------------------
 
 C++ implementation of the Generalized Parallel Replica algorithm
@@ -13,6 +13,10 @@ Link to the project gitlab page (includes more resources):
 See the following articles:
   * A generalized parallel replica dynamics: Binder, Lelièvre & Simpson, 2015: https://doi.org/10.1016/j.jcp.2015.01.002
   * A new implementation of the Generalized Parallel Replica Dynamics targeting metastable biochemical systems: Hédin & Lelièvre, 2018: https://arxiv.org/abs/1807.02431
+
+
+Molecular dynamics is performed by using external codes linked to this program such as:
+  * OpenMM (https://github.com/pandegroup/openmm and https://simtk.org/home/openmm)
 
 ----------------------------------------------
 ## DOCUMENTATION
@@ -34,29 +38,41 @@ with the bash submission files in the ./run directory should be enough for start
 ## DEPENDANCIES
 ----------------------------------------------
 
-You need an MPI development framework installed, compatible with the MPI 3.0 or newer standard : tested implementations : 
+### Dependancies required before running the CMakeLists.txt script
+
+You will need an MPI development framework installed, compatible with the MPI 3.0 or newer standard : tested implementations : 
   * Open MPI 1.10.2 (from Ubuntu 16.04 repositories)
 CMake will try to locate it automatically.
 
-You will need to Download and/or Compile the OpenMM library, a required dependency : 
-  * see https://simtk.org/home/openmm
-  * and/or https://github.com/pandegroup/openmm
-  * tested with version 7.0 to 7.2 (manually compiled and installed)
+You will need the SQLite3 dynamic library on your system: 
+See :
+  * https://sqlite.org/index.html
+
+### Dependancies downloaded automatically via the script "build/download_dependencies.sh"
+
+The script "build/download_dependencies.sh" can download and compile if required the OpenMM and LuaJIT dependancies.
+
+You can however use your own version of the OpenMM library, or any Lua inplementation (either compiled yourself or downloaded somewhere).
+
+#### Ressources (OpenMM): 
+* see https://simtk.org/home/openmm
+* and/or https://github.com/pandegroup/openmm
+* tested with version 7.0 to 7.3.
+
 You may need Nvidia CUDA or AMD OpenCL toolkit for enabling GPU acceleration ; see OpenMM documentation.
 You may also need to edit CMakeLists.txt for specifying path to the include and lib directories of OpenMM.
 CMake will try to locate it automatically.
 
-You will need a Lua library compatible with Lua API version >= 5.1 :
+#### Ressources (Lua/LuaJIT): 
+
+A Lua implementation compatible with Lua API version >= 5.1 is required :
   * A release of Lua 5.x is usually already installed by default for recent linux versions, try to execute 'lua' and/or 'locate liblua'
   * You can Download and compile the official implementation : http://www.lua.org/download.html
   * The LuaJIT implementation can provide an important speedup : http://luajit.org/download.html
 Please download and compile any of the two. See below for hints for setting DCMAKE_PREFIX_PATH in case of a manual install.
 CMake will try to locate it automatically.
 
-If a SQLite3 dynamic library is found on your system it will be used for linking; if not there is a provided one in 
-the "./external" directory, it will be compiled and statically linked to the program.
-See :
-  * https://sqlite.org/index.html
+### Dependancies provided in directory "external"
 
 The excellent Sol2 (header-only Lua<->c++ inteface) and LuaSQLite3 (a Lua/SQLite3 binding) dependancies are provided
 in the './external' directory and are automatically included/compiled if required, and thus should not require extra
@@ -72,7 +88,6 @@ See :
 C and C++ compiler compatible with the C99 and C++14 standards are required.
 Tested compilers:
   * gcc/g++ 5.4.0 and 6.2.0 (from Ubuntu 16.04 repositories)
-  * clang/clang++ 3.8 (from Ubuntu 16.04 repositories)
 
 Be sure to have CMake installed (http://www.cmake.org/), available on most repositories.
 Tested version :
@@ -88,9 +103,9 @@ For building a debug or release or an intermediate release with debug informatio
 
 Debug builds are possibly slower, usually more memory consuming, but useful when debugging with gdb or valgrind.
 
-If OpenMM or your selected Lua implementation is installed to a non-standard (e.g. not /usr/local) CMake will probably not find them,
-in that case add the path where the were installed to CMAKE_PREFIX_PATH, e.g.:
-  * cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$HOME/bin/openmm;$HOME/bin/luajit" ..
+If some dependancies were note detected (e.g. because they are not available within /usr/local) 
+it is required to add the path where the were installed to CMAKE_PREFIX_PATH, e.g.:
+  * cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$HOME/bin/something" ..
 
 Then, once CMake built a Makefile without error, just execute the following in order to build the executable:
   * make
@@ -146,6 +161,8 @@ For setting the amount of cpu threads used by each MPI process use the following
 ----------------------------------------------
 
 **src** and **include** -> contains the C++ source and headers of the gen.parRep software.
+
+**build** -> directory where dependancies will be downloaded, and the program built.
 
 **external** -> contains source and headers of dependencies used by the gen.parRep software.
 

@@ -23,43 +23,20 @@
 
 using namespace std;
 
-ParRepFV::ParRepFV(DATA& _dat,
-                   unique_ptr<ATOM[]>& _at,
-                   unique_ptr<MD_interface>& _md,
-                   unique_ptr<luaInterface>& _luaItf
-                  ) : ParRepAbstract(_dat,_at,_md,_luaItf),
-                      gr_functions(luaItf->get_gr_functions()),
-                      gr_names(luaItf->get_gr_names())
-{
-  equil_steps    = (uint32_t) stoul(params.at("equilibrationSteps"));
-  gr_check       = (uint32_t) stoul(params.at("checkGR"));
-  fv_check       = (uint32_t) stoul(params.at("checkFV"));
-  dynamics_check = (uint32_t) stoul(params.at("checkDynamics"));
-  grTol          = stod(params.at("GRtol"));
-  
-  // and also get database parameters
-  db_backup_frequency_ps = stod(params.at("dbFreq"));
-  
-  // calculate polling time from input params
-  t_poll = ((double)dynamics_check)*dat.timestep ;
-  
-  // assign a Fleming-Viot role to this replica, baster on MPI rank
-  my_FV_role = (i_am_master) ? REF_WALKER : FV_WALKER;
-}
-
 // NOTE to be used by a derived class only
 ParRepFV::ParRepFV(DATA& _dat,
                    unique_ptr<ATOM[]>& _at,
                    unique_ptr<MD_interface>& _md,
                    unique_ptr<luaInterface>& _luaItf,
                    bool ignore_parrepabstract_setup
-                  ) : ParRepAbstract(_dat,_at,_md,_luaItf,true),
+                  ) : ParRepAbstract(_dat,_at,_md,_luaItf,ignore_parrepabstract_setup),
                       gr_functions(luaItf->get_gr_functions()),
                       gr_names(luaItf->get_gr_names())
 {
   equil_steps    = (uint32_t) stoul(params.at("equilibrationSteps"));
   gr_check       = (uint32_t) stoul(params.at("checkGR"));
   fv_check       = (uint32_t) stoul(params.at("checkFV"));
+  discard_first_N_grObs = (uint32_t) stoul(params.at("minAccumulatedObs"));
   dynamics_check = (uint32_t) stoul(params.at("checkDynamics"));
   grTol          = stod(params.at("GRtol"));
   
@@ -68,7 +45,12 @@ ParRepFV::ParRepFV(DATA& _dat,
   
   // calculate polling time from input params
   t_poll = ((double)dynamics_check)*dat.timestep ;
-
+  
+  if(!ignore_parrepabstract_setup)
+  {
+    // assign a Fleming-Viot role to this replica, baster on MPI rank
+    my_FV_role = (i_am_master) ? REF_WALKER : FV_WALKER;
+  }
 }
 
 ///////////////////////////////////////////////////
@@ -307,7 +289,7 @@ void ParRepFV::do_FlemingViot_procedure()
   // The ref walker is in charge of allocating the GelmanRubinAnalysis object, it will also check the convergence
   if(i_am_master)
   {
-    gr = unique_ptr<GelmanRubinAnalysis>(new GelmanRubinAnalysis((uint32_t)mpi_gcomm_size));
+    gr = unique_ptr<GelmanRubinAnalysis>(new GelmanRubinAnalysis((uint32_t)mpi_gcomm_size,discard_first_N_grObs));
     // register grObservables parsed from lua file
     for(const pair<GR_function_name,GR_function>& p : gr_functions)
     {
@@ -317,8 +299,7 @@ void ParRepFV::do_FlemingViot_procedure()
   
   // number of observables that the workers send to the ref walker every fv_check steps
   const uint32_t numObs = fv_check/gr_check;
-
-  // This will store the observables sent by the workers to the ref walker
+  
   map<GR_function_name,double*> recvObsMap;
   if(my_FV_role == REF_WALKER)
   {
@@ -383,7 +364,7 @@ void ParRepFV::do_FlemingViot_procedure()
                    rma_info,global_comm,&(gr_windows_addr[n]));
   }
 
-  md->getState(nullptr,&fv_e,nullptr,at.get());
+  md->getSimData(nullptr,&fv_e,nullptr,at.get());
   luaItf->set_lua_variable("epot",fv_e.epot());
   luaItf->set_lua_variable("ekin",fv_e.ekin());
   luaItf->set_lua_variable("etot",fv_e.etot());
@@ -442,7 +423,7 @@ void ParRepFV::do_FlemingViot_procedure()
     //increment local time and continue
     fv_local_time += (double) gr_check * dat.timestep;
 
-    md->getState(nullptr,&fv_e,nullptr,at.get());
+    md->getSimData(nullptr,&fv_e,nullptr,at.get());
     luaItf->set_lua_variable("epot",fv_e.epot());
     luaItf->set_lua_variable("ekin",fv_e.ekin());
     luaItf->set_lua_variable("etot",fv_e.etot());
@@ -452,7 +433,7 @@ void ParRepFV::do_FlemingViot_procedure()
       // first retrieve the type of observable (name), the pointer to the lua function (f) corresponding to it, and the vector of observations (v) corresponding to name 
       const GR_function_name& name = p.first;
       const GR_function&         f = p.second;
-      
+
       gr_observations[name][obsIndex] = f();
     }
     obsIndex += 1;
@@ -520,16 +501,19 @@ void ParRepFV::do_FlemingViot_procedure()
     
     /*
      * attach the windows to the observable values
+     * NOTE useless if reset_loop is triggered below
+     * But this is supposed to be something really rare, so we put this code here in order to hibe the latency of the barrier.
+     * if reset_loop is trigerred, this step is undone immediately.
      */
     for(const GR_function_name& n: gr_names)
     {
       MPI_Win& w = gr_windows[n];
       MPI_Aint& addr = gr_addr[n];
-      
       MPI_Win_attach(w, gr_observations[n], obsIndex*sizeof(double));
       MPI_Get_address(gr_observations[n],&addr);
     }
     
+    // we did our best to do something else, but now we have no choice and we should wait for the ibarrier completion ...
     MPI_Wait(&barrier_req,MPI_STATUS_IGNORE);
     
     // executed by all ranks when a reset is required
@@ -539,20 +523,26 @@ void ParRepFV::do_FlemingViot_procedure()
       MPI_Bcast(fv_e.ene.data(),3,MPI_DOUBLE,masterRank,global_comm);
       MPI_Bcast(&ref_clock_time,1,MPI_DOUBLE,masterRank,global_comm);
       
+      // before waiting for the ibcast to complete, reset other things here to hide latency 
+      
       converged = false;
       reset_loop = false;
       
       steps_since_last_check_state = 0;
       steps_since_beginning = 0;
       
+      // enforce requests to be null
+      // NOTE already the case if everything done properly
       if(barrier_req != MPI_REQUEST_NULL)
         MPI_Request_free(&barrier_req);
 
-      // undo the memory attachment
+      // undo the useless memory attachment
       for(const GR_function_name& n: gr_names)
       {
         MPI_Win& w = gr_windows[n];
+
         MPI_Win_detach(w, gr_observations[n]);
+        
         gr_addr[n] = 0;
         obsIndex = 0;
       }
@@ -622,9 +612,9 @@ void ParRepFV::do_FlemingViot_procedure()
         bool candidate_also_branching = false;
         
         MPI_Win_lock(MPI_LOCK_SHARED,candidate,0,branching_window);
-        MPI_Get(&candidate_also_branching,1,   // void *origin_addr, int origin_count,
+        MPI_Get(&candidate_also_branching,1, // void *origin_addr, int origin_count,
                 MPI_CXX_BOOL,candidate,        // MPI_Datatype origin_datatype, int target_rank,
-                0,1,                           // MPI_Aint target_disp, int target_count,
+                0,1,                         // MPI_Aint target_disp, int target_count,
                 MPI_CXX_BOOL,branching_window);// MPI_Datatype target_datatype, MPI_Win win
         MPI_Win_unlock(candidate,branching_window);
         
@@ -680,7 +670,7 @@ void ParRepFV::do_FlemingViot_procedure()
       
       md->setCrdsVels(at.get());
       
-      md->getState(nullptr,&fv_e,nullptr,nullptr);
+      md->getSimData(nullptr,&fv_e,nullptr,nullptr);
       luaItf->set_lua_variable("epot",fv_e.epot());
       luaItf->set_lua_variable("ekin",fv_e.ekin());
       luaItf->set_lua_variable("etot",fv_e.etot());
@@ -714,7 +704,6 @@ void ParRepFV::do_FlemingViot_procedure()
     for(size_t i=0; i<gr_names.size(); i++)
     {
       const string& n = gr_names[i];
-      
       double* recvObs = (my_FV_role == REF_WALKER) ? recvObsMap[n] : nullptr;
       
       MPI_Igather(gr_observations[n],numObs,MPI_DOUBLE,
@@ -817,7 +806,7 @@ void ParRepFV::do_FlemingViot_procedure()
     delete[] gr_observations[n];
   
   gr_observations.clear();
-  
+
   for(size_t i=0; i<gr_names.size(); i++)
   {
     if(igather_obs_reqs[i] != MPI_REQUEST_NULL)

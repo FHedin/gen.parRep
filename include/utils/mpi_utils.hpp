@@ -47,8 +47,21 @@ namespace MPIutils
    * @param mpi_root The root process of the broadcast
    * @param comm The MPI communicator
    */
-  void mpi_ibroadcast_atom_array(DATA& dat, ATOM at[], const int32_t mpi_root, MPI_Comm& comm);
+//   void mpi_ibroadcast_atom_array(DATA& dat, ATOM at[], const int32_t mpi_root, MPI_Comm& comm);
 
+  /**
+   * @brief broadcasting functions for sharing data (non blocking version)
+   *        to use during simulation for hidding latency of the broadcast by performing other computations before checking the requests
+   * 
+   * @param dat Simulatiuon data
+   * @param at Atomic structure
+   * @param mpi_root The root process of the broadcast
+   * @param comm The MPI communicator
+   * 
+   * @return Pointer to an array of requests of size 2, for checking completion of the broadcasts of ATOM[] and PBC structs
+   */
+//   MPI_Request* mpi_ibroadcast_atom_array_nowait(DATA& dat, ATOM at[], const int32_t mpi_root, MPI_Comm& comm);
+  
   /**
    * @brief broadcasting functions for sharing data (non blocking version)
    *        to use during simulation for hidding latency of the broadcast by performing other computations before checking the requests
@@ -60,8 +73,8 @@ namespace MPIutils
    * @param reqA Pointer to a MPI_Request
    * @param reqB Pointer to a MPI_Request
    */
-  void mpi_ibroadcast_atom_array_nowait(DATA& dat, ATOM at[], const int32_t mpi_root,
-                                        MPI_Comm& comm, MPI_Request* reqA, MPI_Request* reqB);
+//   void mpi_ibroadcast_atom_array_nowait(DATA& dat, ATOM at[], const int32_t mpi_root,
+//                                                  MPI_Comm& comm, MPI_Request* reqA, MPI_Request* reqB);
   
   /**
    * @brief  Function that alters the file name in a unique way when using MPI

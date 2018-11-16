@@ -16,6 +16,8 @@
 
 #include "OpenMM.h"
 
+class luaInterface;
+
 /**
  * @brief Enumerated type representing supported OpenMM platforms
  * 
@@ -39,6 +41,8 @@ enum INTEGRATORS
   BROWNIAN      ///< code will use a Brownian integrator (i.e. overdamped Langevin) from OpenMM
 };
 
+typedef std::map<std::string,std::string> PLATFORM_PROPERTIES;
+
 /**
  * @brief This class is a custom wrapper arround the OpenMM C++ library
  * 
@@ -56,18 +60,26 @@ public:
   *        method initialise_fromSerialization(...)
   *        taking care of XML files unserializing
   * 
+  * @param _dat Common simulation parameters
+  * @param omm_name_version A string representation of the enine version (e.g. "Openmm 7.3")
   * @param syst An OpenMM system
   * @param integr An OpenMM integrator, should be Langevin or Brownian (or custom version of those)
   * @param state An OpenMM state with at least positions
   * @param platformDesired The platform to use for performing the computations
+  * @param platformProperties An associative map containing key-value string pairs of specific per platform parameters (to be forwarded to OpenMM)
+  * 
   */
   OMM_interface(DATA& _dat,
+                const std::string& omm_name_version,
                 OpenMM::System& syst,
                 OpenMM::Integrator& integr,
                 OpenMM::State& state,
-                PLATFORMS platformDesired
+                PLATFORMS platformDesired,
+                const PLATFORM_PROPERTIES& platformProperties
   );
 
+  ~OMM_interface();
+  
   virtual void doNsteps(uint32_t numSteps) override;
   
   virtual uint32_t runForPhysicalTime(std::chrono::milliseconds t) override;
@@ -85,8 +97,8 @@ public:
   
   virtual void randomiseVelocities() override;
   
-  virtual void getState(double* timeInPs, ENERGIES* energies,
-                double* currentTemperature, ATOM atoms[]) override;
+  virtual void getSimData(double* timeInPs, ENERGIES* energies,
+                          double* currentTemperature, ATOM atoms[], int32_t groups=-1) override;
   
   virtual void getParticlesParams(ATOM atoms[]) override;
   
@@ -113,33 +125,27 @@ public:
   ////////////////////////////////////////////
   // STATIC METHODS HERE
   ////////////////////////////////////////////
-  
-  /**
-   * @brief Returns version of the OpenMM library in use
-   * 
-   * @return OpenMM library version as a std::string
-   */
-  static const std::string& getOMMversion() { return OpenMM::Platform::getOpenMMVersion();}
 
   /**
    * @brief do initialisation of OpenMM code but using previously serialized states
    * 
    * @param dat Simulation parameters
-   * @param sysXMLfile OpenMM serialised system (path to xml file)
-   * @param integratorXMLfile OpenMM serialised integrator (path to xml file)
-   * @param stateXMLfile OpenMM serialised state (path to xml file)
-   * @return MyOMMinterface* A pointer to an initialised OpenMM interface
+   * @param luaItf A unique_ptr to the lua interface from which parsed parameters are retrieved
+   * 
+   * @return OMM_interface* A pointer to an initialised OpenMM interface
    */
-  static std::unique_ptr<OMM_interface> initialise_fromSerialization(DATA& dat,
-                                                     const std::string& sysXMLfile,
-                                                     const std::string& integratorXMLfile,
-                                                     const std::string& stateXMLfile,
-                                                     const std::string& platformName
-                                                     );
+  static std::unique_ptr<OMM_interface> initialise_fromSerialization(DATA& dat, std::unique_ptr<luaInterface>& luaItf);
   
   static const std::map<PLATFORMS,std::string> omm_platforms_names;
   
 private:
+  
+  /**
+   * constant used when calculating temperature from kinetic energy
+   * T = (2./(3.*K_Boltzmann))*Ekin
+   * So EkinToK = 2./(3.*K_Boltzmann) with K_Boltzmann in units of kJ/(mol.K)
+   */
+  static const double EkinToK;
   
   std::unique_ptr<OpenMM::System>         system  = nullptr;
   std::unique_ptr<OpenMM::Context>        context = nullptr;
@@ -158,6 +164,9 @@ private:
   std::vector<OpenMM::Vec3> pos;
   std::vector<OpenMM::Vec3> vel;
   
+  /// number of degreees of freedom
+  int32_t dofs; 
+  
   /*
    * This is used when calling runForPhysicalTime
    * The first time it is called we estimate how much of CPU physical time will cost one integration step,
@@ -171,9 +180,10 @@ private:
    * @brief Register a platform for use
    * 
    * @param platformDesired The desired platform
+   * @param  properties An associative map containing key-value string pairs of specific per platform parameters (to be forwarded to OpenMM)
    * @param state A state to be used for creating the platform
    */
-  void addPlatform(PLATFORMS platformDesired, OpenMM::State& state);
+  void addPlatform(PLATFORMS platformDesired, const PLATFORM_PROPERTIES& properties, OpenMM::State& state);
 
 };
 

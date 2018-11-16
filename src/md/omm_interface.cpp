@@ -18,9 +18,47 @@
 
 #include "logger.hpp"
 #include "rand.hpp"
-
-#include "omm_interface.hpp"
 #include "mpi_utils.hpp"
+#include "lua_interface.hpp"
+#include "omm_interface.hpp"
+
+// A few useful constants definition taken from OMM's reference/SimTKOpenMMRealType.h
+// #define ANGSTROM     (1e-10) 
+#define KILO         (1e3)
+// #define NANO         (1e-9)
+// #define PICO         (1e-12)
+// #define A2NM         (ANGSTROM/NANO)
+// #define NM2A         (NANO/ANGSTROM)
+// #define RAD2DEG      (180.0/M_PI)
+// #define CAL2JOULE    (4.184)
+// #define E_CHARGE     (1.60217733e-19)
+
+// #define AMU          (1.6605402e-27)
+#define BOLTZMANN    (1.380658e-23)            /* (J/K)   */
+#define AVOGADRO     (6.0221367e23)          
+#define RGAS         (BOLTZMANN*AVOGADRO)      /* (J/(mol K))  */
+#define BOLTZ        (RGAS/KILO)               /* (kJ/(mol K)) */
+// #define FARADAY      (E_CHARGE*AVOGADRO)       /* (C/mol)      */
+// #define ELECTRONVOLT (E_CHARGE*AVOGADRO/KILO)  /* (kJ/mol)   */     
+// 
+// #define EPSILON0     (5.72765E-4)              /* (e^2 Na/(kJ nm)) == (e^2/(kJ mol nm)) */ 
+// 
+// #define SPEED_OF_LIGHT   (2.9979245800E05)      /* nm/ps                */
+// #define ATOMICMASS_keV   (940000.0)             /* Atomic mass in keV   */
+// #define ELECTRONMASS_keV (512.0)                /* Electron mas in keV  */
+// 
+// #define ONE_4PI_EPS0      138.935456
+// #define PRESFAC           (16.6054)             /* bar / pressure unity */
+// #define ENM2DEBYE         48.0321               /* Convert electron nm to debye */
+// #define DEBYE2ENM         0.02081941
+
+/**
+ * constant used when calculating temperature from kinetic energy
+ * T = (2./(dofs*K_Boltzmann))*Ekin
+ * where dofs in the number of degrees of freedom in the system
+ * So EkinToK = 2./K_Boltzmann with K_Boltzmann in units of kJ/(mol.K)
+ */
+const double OMM_interface::EkinToK = 2.0/BOLTZ;
 
 using OpenMM::Vec3;
 using namespace std;
@@ -44,11 +82,20 @@ const std::map<PLATFORMS,std::string> OMM_interface::omm_platforms_names =
  * then most of the calls to other methods below are not useful anymore
  */
 OMM_interface::OMM_interface(DATA& _dat,
+                             const string& omm_name_version,
                              OpenMM::System& syst,
                              OpenMM::Integrator& integr,
                              OpenMM::State& state,
-                             PLATFORMS platformDesired
-                             ) : MD_interface(_dat)
+                             PLATFORMS platformDesired,
+                             const PLATFORM_PROPERTIES& platformProperties
+) : MD_interface(_dat,
+                 MD_ENGINES::OPENMM,
+                 omm_name_version,
+                 MD_DISTANCE_UNIT::NANOMETER,
+                 MD_ENERGY_UNIT::KJ_PER_MOL,
+                 true
+                )
+/* MD_interface::MD_interface(DATA& _dat,MD_ENGINES _engine_type, string& _engine_description, MD_DISTANCE_UNIT _distance_unit, MD_ENERGY_UNIT _energy_unit, bool _engine_supports_groups_splitting */
 {
   // Load all available OpenMM plugins from their default location.
   const string& plugins_dir = OpenMM::Platform::getDefaultPluginsDirectory();
@@ -63,7 +110,7 @@ OMM_interface::OMM_interface(DATA& _dat,
   integrator = unique_ptr<OpenMM::Integrator>(&integr);
   
   // deserialize an OpenMM state : coordinates velocities forces energy
-  addPlatform(platformDesired,state);
+  addPlatform(platformDesired,platformProperties,state);
   
   state.getPeriodicBoxVectors(pbc[0],pbc[1],pbc[2]);
   
@@ -88,8 +135,7 @@ OMM_interface::OMM_interface(DATA& _dat,
   }
   else
   {
-    fprintf(stderr,"Error in %s line %d ; see error log file for details\n",__FILE__,__LINE__);
-    MPI_CUSTOM_ABORT_MACRO();
+    throw runtime_error("Error when re-seeding the OMM integrator : integrator type is neither OpenMM::LangevinIntegrator or OpenMM::BrownianIntegrator !\n");
   }
   
   // fill dat structure with unserialised data
@@ -98,9 +144,40 @@ OMM_interface::OMM_interface(DATA& _dat,
 
   pos = vector<Vec3>(dat.natom);
   vel = vector<Vec3>(dat.natom);
+  
+  /**
+   * calculate the number of degrees of freedom of the system
+   * it is 3 times the number of particles (not virtual ones for which mass=0)
+   * minus the number of constraints
+   * and minus 3 if a center of mass removal is enabled
+   */
+  dofs = 0.0;
+  
+  for(int32_t i=0; i<system->getNumParticles(); i++)
+  {
+    if(system->getParticleMass(i) > 1e-8)
+      dofs += 3;
+  }
+  
+  dofs -= system->getNumConstraints();
+  
+  for(int32_t i=0; i<system->getNumForces(); i++)
+  {
+    OpenMM::Force& f = system->getForce(i);
+    if(dynamic_cast<OpenMM::CMMotionRemover*>(&f))
+    {
+      dofs -=3;
+      break;
+    }
+  }
+  
 }
 
-void OMM_interface::addPlatform(PLATFORMS platformDesired, OpenMM::State& state)
+OMM_interface::~OMM_interface()
+{
+}
+
+void OMM_interface::addPlatform(PLATFORMS platformDesired, const PLATFORM_PROPERTIES& properties, OpenMM::State& state)
 {
   OpenMM::Platform* platform = &(OpenMM::Platform::getPlatformByName("Reference"));
   
@@ -137,7 +214,7 @@ void OMM_interface::addPlatform(PLATFORMS platformDesired, OpenMM::State& state)
   }
         
   // create the context from all the objects
-  context = unique_ptr<OpenMM::Context> (new OpenMM::Context(*system, *integrator, *platform) );
+  context = unique_ptr<OpenMM::Context> (new OpenMM::Context(*system, *integrator, *platform, properties) );
     
   // also register initial state
   context->setState(state);
@@ -279,11 +356,15 @@ void OMM_interface::randomiseVelocities()
   // set velocities to initial temperature
   int32_t velSeed = get_int32();
   context->setVelocitiesToTemperature(dat.T,velSeed);
-  LOG_PRINT(LOG_INFO,"Velocities randomised for T = %.3lf K with seed %d\n",dat.T,velSeed);
+  LOG_PRINT(LOG_INFO,"Velocities randomised to target T = %.3lf K with seed %d\n",dat.T,velSeed);
+  
+  double newT = 0.0;
+  this->getSimData(nullptr,nullptr,&newT,nullptr);
+  LOG_PRINT(LOG_INFO,"Real temperature after randomisation is : T = %.3lf K\n",newT);
 }
 
-void OMM_interface::getState(double* timeInPs, ENERGIES* energies, double* currentTemperature,
-                             ATOM atoms[])
+void OMM_interface::getSimData(double* timeInPs, ENERGIES* energies, double* currentTemperature,
+                               ATOM atoms[], int32_t groups)
 {
   const bool wantTime        = !(timeInPs==nullptr);
   const bool wantEnergy      = !(energies==nullptr);
@@ -292,13 +373,36 @@ void OMM_interface::getState(double* timeInPs, ENERGIES* energies, double* curre
   
   int32_t infoMask = 0;
   
-  if(wantCrdVels)
-    infoMask |= OpenMM::State::Positions | OpenMM::State::Velocities;
+  /**
+   * OpenMM allows retrieving data for only a part of the System if it was splitted in several forceGroups.
+   * In this case it requires a specific mask for deciding which groups to access.
+   * 
+   * Let us assume the Forces were divided in two groups: 0 and 1 (OMM supports groups 0 to 31)
+   * 
+   * If the result of the operation ((mask & (1<<i)) != 0) is true, the group i will have its data retrieved.
+   *
+   * For group 0, a valid mask is 0x1 i.e. 1: indeed (1<<0) = 2^0 = 1 , so 1 & 1 = 1 so group 0 is included.
+   *                                          However as (1<<1) = 2^1 = 2  then 1 & 2 = 0 so group 1 is not included
+   * 
+   * Similarly for obtaining data for group 1 only : 
+   * We use mask 0x2 (i.e. 2) because : 2 & (1<<1) = 2&2 = 2 , but group 0 not included because 2 & (1<<0) = 2 & 1 = 0
+   * 
+   * A mask of 0xFFFFFFFF makes sure to retrieve data for all groups
+   * 
+   * We assume that groups already contains a valid mask if it is not equal to -1
+   */
+  int32_t groupsMask = (groups==-1) ? 0xFFFFFFFF : groups;
   
-  if(wantEnergy)
+  if(wantCrdVels)
+    infoMask |= (OpenMM::State::Positions | OpenMM::State::Velocities);
+  
+  if(wantEnergy || wantTemperature)
     infoMask |= OpenMM::State::Energy;
   
-  OpenMM::State state = context->getState(infoMask,true);
+  OpenMM::State state = context->getState(infoMask,true,groupsMask);
+  
+  if(wantEnergy || wantTemperature)
+    T = EkinToK*state.getKineticEnergy()/dofs;
   
   if(wantTime)
     *timeInPs = state.getTime();
@@ -329,16 +433,7 @@ void OMM_interface::getState(double* timeInPs, ENERGIES* energies, double* curre
   }
     
   if(wantTemperature)
-  {
-    if(integType==LANGEVIN)
-    {
-      *currentTemperature = lint->getTemperature();
-    }
-    else if(integType==BROWNIAN)
-    {
-      *currentTemperature = bint->getTemperature();
-    }
-  }
+    *currentTemperature = T;
 
 }
 
@@ -360,15 +455,6 @@ double OMM_interface::getTime()
 
 double OMM_interface::getTemperature()
 {
-  if(integType==LANGEVIN)
-  {
-    T = lint->getTemperature();
-  }
-  else if(integType==BROWNIAN)
-  {
-    T = bint->getTemperature();
-  }
-
   return T;
 }
 
@@ -407,12 +493,18 @@ void OMM_interface::restoreOMMobject()
 //------------------------------------------------------------------------
 
 unique_ptr<OMM_interface> OMM_interface::initialise_fromSerialization(DATA& _dat,
-                                                                      const string& sysXMLfile,
-                                                                      const string& integratorXMLfile,
-                                                                      const string& stateXMLfile,
-                                                                      const string& platformName
+                                                                      unique_ptr<luaInterface>& luaItf
                                                                      )
 {
+  const lua_ParVal_map& luaParams = luaItf->get_parsed_parameters_map();
+  
+  // get paths to OMM XML serialised files
+  const string sysXMLfile        = luaParams.at("system");
+  const string integratorXMLfile = luaParams.at("integrator");
+  const string stateXMLfile      = luaParams.at("state");
+  // get desired OpenMM platform
+  const string platformName      = luaParams.at("platform");
+  
   LOG_PRINT(LOG_INFO,"Initialising OpenMM interface with serialized xml files : '%s' '%s' '%s'\n",
           sysXMLfile.c_str(),integratorXMLfile.c_str(),stateXMLfile.c_str());
   
@@ -428,8 +520,7 @@ unique_ptr<OMM_interface> OMM_interface::initialise_fromSerialization(DATA& _dat
   }
   else
   {
-    fprintf(stderr,"Error in %s line %d ; see error log file for details\n",__FILE__,__LINE__);
-    MPI_CUSTOM_ABORT_MACRO();
+    throw runtime_error("Error when attempting to parse the OpenMM XML file " + sysXMLfile + " !\n");
   }
 
   // --------------------------------------------- 
@@ -444,8 +535,7 @@ unique_ptr<OMM_interface> OMM_interface::initialise_fromSerialization(DATA& _dat
   }
   else
   {
-    fprintf(stderr,"Error in %s line %d ; see error log file for details\n",__FILE__,__LINE__);
-    MPI_CUSTOM_ABORT_MACRO();
+    throw runtime_error("Error when attempting to parse the OpenMM XML file " + integratorXMLfile + " !\n");
   }
   
   // --------------------------------------------- 
@@ -459,8 +549,7 @@ unique_ptr<OMM_interface> OMM_interface::initialise_fromSerialization(DATA& _dat
   }
   else
   {
-    fprintf(stderr,"Error in %s line %d ; see error log file for details\n",__FILE__,__LINE__);
-    MPI_CUSTOM_ABORT_MACRO();
+    throw runtime_error("Error when attempting to parse the OpenMM XML file " + stateXMLfile + " !\n");
   }
 
   // --------------------------------------------- 
@@ -481,9 +570,12 @@ unique_ptr<OMM_interface> OMM_interface::initialise_fromSerialization(DATA& _dat
 
   LOG_PRINT(LOG_INFO,"OMM requested platform is : %s\n",platformName.c_str());
   
+  const PLATFORM_PROPERTIES& platformProperties = luaItf->get_omm_platform_properties();
+  
   // create the c++ object corresponding to a c++ OpenMM interface
+  const string omm_version = "Openmm" + OpenMM::Platform::getOpenMMVersion();
   OMM_interface* omm_itf = nullptr;
-  omm_itf = new OMM_interface(_dat,*sys,*integ,st,platformDesired);
+  omm_itf = new OMM_interface(_dat,omm_version,*sys,*integ,st,platformDesired,platformProperties);
   
   LOG_PRINT(LOG_INFO,"OpenMM interface properly initialised from serialised files !\n");
   

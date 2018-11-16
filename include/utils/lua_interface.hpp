@@ -86,6 +86,8 @@ typedef std::string LuaParameter;
 typedef std::string LuaValue;
 typedef std::map<LuaParameter,LuaValue> lua_ParVal_map;
 
+typedef std::map<std::string,std::string> omm_platform_properties;
+
 /**
 * @brief This class is in charge of parsing the lua input script, and of bridging C++ and Lua codes together.
 */
@@ -197,6 +199,13 @@ public:
   * @return the reference to the map
   */
   const lua_ParVal_map& get_parsed_parameters_map() const {return pvMap;}
+  
+  /**
+   * @brief Returns a const reference to the map where parsed OpenMM platform specific properties are stored
+   * 
+   * @return the reference to the map
+   */
+  const omm_platform_properties& get_omm_platform_properties() const {return omm_props;}
 
   /**
   * @brief add or update a Lua variable
@@ -222,6 +231,11 @@ private:
   void register_default_lua_variables();
   
   /**
+   * @brief parse OpenMM MD engine parameters
+   */
+  void parse_omm_params();
+  
+  /**
   * @brief Get parrep parameters from Lua
   * 
   */
@@ -244,6 +258,7 @@ private:
   DATA& dat;                            ///< simulation parameters
   std::unique_ptr<ATOM[]>& at;          ///< coordinates and velocities
   std::unique_ptr<MD_interface>& md;    ///< MD interface class
+//   std::string md_engine_name;
   
   std::vector<GR_function_name> gr_funcs_names;       ///< vector of Gelman-Rubin functions' names
   std::map<GR_function_name,GR_function> gr_funcs;    ///< map of Gelman-Rubin (names,functions)
@@ -263,6 +278,8 @@ private:
   ParRep_function_get_serialized_state func_get_serialized_state;   ///< Lua function for getting from Lua a serialized state
   ParRep_function_put_serialized_state func_put_serialized_state;   ///< Lua function for putting to Lua a serialized state
 
+  omm_platform_properties omm_props;
+  
   int32_t my_id     = -1;
   int32_t num_procs = -1;
 };

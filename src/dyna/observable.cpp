@@ -116,8 +116,7 @@ void Observable::replace_observations(const vector<double>& extern_observations)
   }
   else
   {
-    fprintf(stderr,"Error in %s line %d ; see error log file for details\n",__FILE__,__LINE__);
-    MPI_CUSTOM_ABORT_MACRO();
+    throw runtime_error("Error in function Observable::replace_observations : size of replacement vector does not match the size of the current observations vector !\n");
   }
 }
 

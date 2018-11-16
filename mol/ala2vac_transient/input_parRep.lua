@@ -17,6 +17,9 @@ max_run_time_hours = 24.0 -- default if not set in this script will be 24 hours
 --  useful for large systems if the I/O may take some time; should be at least 1 minute, and no fractional value allowed
 minutes_to_stop_before_max_run_time = 1 -- default if not set in this script will be 5 minutes
 
+-- This uses OpenMM as MD engine
+MD_Engine = "OpenMM"
+
 -- OpenMM platform to use
 --  AUTO : let OpenMM find the fastest platform (default)
 --  REF  : on cpu, not optimised, not parallellised : slow !
@@ -28,6 +31,35 @@ minutes_to_stop_before_max_run_time = 1 -- default if not set in this script wil
 OMMplatform = "CPU"
 -- OMMplatform = "OCL"
 -- OMMplatform = "CUDA"
+
+-- We can define here in an array extra platform specific properties passed to OpenMM
+--  see http://docs.openmm.org/latest/userguide/library.html#platform-specific-properties
+--  for a list of OpenMM platform specific properties 
+-- Internally coerced to a std::map<std::string,std::string> so use a string for indexing (key, before the =)
+--  and also be sure to define the values (after the =) also as strings (wrapped within ""), even if it is an integer
+
+-- REF platform has no extra properties
+-- ...
+
+-- CPU platform properties : Threads = "1" is equivalent to defining OPENMM_CPU_THREADS=1 in the environnment
+OMMplatform_properties = { Threads = "1"}
+
+-- OpenCL platform properties
+-- OMMplatform_properties = { 
+--   Precision = "mixed", -- or "single" or "double"
+--   UseCpuPme = "false", -- or true
+--   OpenCLPlatformIndex = "0",
+--   DeviceIndex = "0"
+-- }
+
+-- CUDA platform properties
+-- OMMplatform_properties = {
+--   Precision = "mixed", -- or "single" or "double"
+--   UseCpuPme = "false", -- or "true"
+--   DeviceIndex = "0",
+-- --   CudaCompiler = "/path/to/nvcc",
+--   UseBlockingSync = "false" -- or "true"
+-- }
 
 -- load the integrator parameters from a serialised OpenMM XML file ;
 -- no default, error if undefined
@@ -412,8 +444,6 @@ database =
 -- only rank 0 manages a database
 if(mpi_rank_id==0)
 then
-
-  SQLiteDB={}
 
   SQLiteDB.insert_statement_states  = [[ INSERT INTO STATES (PARREP_DONE,REF_TIME,ESC_TIME,STATE_FROM,TAU)
                                                     VALUES ($lprep,$reft,$esct,$state_from,$tau); ]]

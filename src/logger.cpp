@@ -24,7 +24,7 @@
 #define MSG_BUFFER_SIZE  256
 
 // those variabes are persisting but only accessible from this file
-static FILE *F_ERROR , *F_WARN , *F_INFO , *F_DEBUG ;
+static FILE *F_WARN , *F_INFO , *F_DEBUG ;
 static time_t rawtime;
 static bool filesOpened=false;
 
@@ -32,30 +32,13 @@ using namespace std;
 
 void init_logfiles()
 {
-
-  F_ERROR = nullptr;
   F_WARN  = nullptr;
   F_INFO  = nullptr;
   F_DEBUG = nullptr;
-  
+
   //--------------------------------------------------
   
   if(LOG_SEVERITY > LOG_NOTHING )
-  {
-    string my_name="error.log";
-    MPIutils::mpi_get_unique_name(my_name);
-    F_ERROR = fopen(my_name.c_str(),"wt");
-
-    if(F_ERROR == nullptr)
-    {
-      cerr << "Error : cannot open the F_ERROR log file !" << endl;
-      MPI_CUSTOM_ABORT_MACRO();
-    }
-  }
-  
-  //--------------------------------------------------
-  
-  if(LOG_SEVERITY > LOG_ERROR )
   {
     string my_name="warning.log";
     MPIutils::mpi_get_unique_name(my_name);
@@ -63,8 +46,7 @@ void init_logfiles()
     
     if(F_WARN == nullptr)
     {
-      cerr << "Error : cannot open the F_WARN log file !" << endl;
-      MPI_CUSTOM_ABORT_MACRO();
+      throw runtime_error("Error : impossible to open-write file " + my_name + " !\n");
     }
   }
   
@@ -78,8 +60,7 @@ void init_logfiles()
     
     if(F_INFO == nullptr)
     {
-      cerr << "Error : cannot open the F_INFO log file !" << endl;
-      MPI_CUSTOM_ABORT_MACRO();
+      throw runtime_error("Error : impossible to open-write file " + my_name + " !\n");
     }
   }
   
@@ -94,8 +75,7 @@ void init_logfiles()
     
     if(F_DEBUG == nullptr)
     {
-      cerr << "Error : cannot open the F_DEBUG log file !" << endl;
-      MPI_CUSTOM_ABORT_MACRO();
+      throw runtime_error("Error : impossible to open-write file " + my_name + " !\n");
     }
   }
   
@@ -111,9 +91,6 @@ void close_logfiles()
   if(filesOpened)
   {
     if(LOG_SEVERITY > LOG_NOTHING )
-      fclose(F_ERROR);
-
-    if(LOG_SEVERITY > LOG_ERROR )
       fclose(F_WARN);
 
     if(LOG_SEVERITY > LOG_WARNING )
@@ -134,10 +111,6 @@ const char* get_loglevel_string()
   {
   case LOG_NOTHING:
     str_log = "LOG_NOTHING";
-    break;
-
-  case LOG_ERROR:
-    str_log = "LOG_ERROR";
     break;
 
   case LOG_WARNING:
@@ -198,11 +171,11 @@ char* get_time()
   return date;
 }
 
-int32_t LOG_PRINT(LOG_LEVELS mesg_severity, const char *fmt, ...)
+void LOG_PRINT(LOG_LEVELS mesg_severity, const char *fmt, ...)
 {
   
   if(!filesOpened)
-    return -1;
+    return;
   
   // if the severity of the current message is at least equal to the global level we print it
   if (mesg_severity <= LOG_SEVERITY)
@@ -220,11 +193,6 @@ int32_t LOG_PRINT(LOG_LEVELS mesg_severity, const char *fmt, ...)
     // depending of the severity, chose the correct file for writting
     switch(mesg_severity)
     {
-      case LOG_ERROR:
-        FP = F_ERROR;
-        sprintf(message,"[Error @ ");
-        break;
-
       case LOG_WARNING:
         FP = F_WARN;
         sprintf(message,"[Warning @ ");
@@ -241,7 +209,6 @@ int32_t LOG_PRINT(LOG_LEVELS mesg_severity, const char *fmt, ...)
         break;
 
       default:
-        return -1;
         break;
     }
 
@@ -261,10 +228,8 @@ int32_t LOG_PRINT(LOG_LEVELS mesg_severity, const char *fmt, ...)
 
     va_end(list);
 
-    return 0;
   } // end of if (mesg_severity >= LOG_SEVERITY)
 
-  return 1;
 }
 
 void LOG_FLUSH_ALL()
@@ -272,9 +237,6 @@ void LOG_FLUSH_ALL()
   if(filesOpened)
   {
     if(LOG_SEVERITY > LOG_NOTHING )
-      fflush(F_ERROR);
-
-    if(LOG_SEVERITY > LOG_ERROR )
       fflush(F_WARN);
 
     if(LOG_SEVERITY > LOG_WARNING )

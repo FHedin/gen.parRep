@@ -287,7 +287,7 @@ void ParRep::do_decorrelation()
       // time update
       corr_local_time += rt;
       
-      md->getState(nullptr,&corr_e,nullptr,at.get());
+      md->getSimData(nullptr,&corr_e,nullptr,at.get());
       luaItf->set_lua_variable("epot",corr_e.epot());
       luaItf->set_lua_variable("ekin",corr_e.ekin());
       luaItf->set_lua_variable("etot",corr_e.etot());
@@ -336,7 +336,7 @@ void ParRep::do_decorrelation()
     luaItf->set_lua_variable("referenceTime",ref_clock_time);
     
     // get coordinates
-    md->getState(nullptr,&corr_e,nullptr,at.get());
+    md->getSimData(nullptr,&corr_e,nullptr,at.get());
 
 }
 
@@ -363,7 +363,7 @@ void ParRep::do_dephasing()
     md->doNsteps(dephase_check);
     dephase_local_time += rt;
 
-    md->getState(nullptr,&dephase_e,nullptr,at.get());
+    md->getSimData(nullptr,&dephase_e,nullptr,at.get());
     luaItf->set_lua_variable("epot",dephase_e.epot());
     luaItf->set_lua_variable("ekin",dephase_e.ekin());
     luaItf->set_lua_variable("etot",dephase_e.etot());
@@ -396,6 +396,6 @@ void ParRep::do_dephasing()
   LOG_PRINT(LOG_INFO,"Rank %d dephased properly (after %.2lf ps).\n",  mpi_id_in_gcomm,dephase_local_time);
   fprintf(stdout,    "Rank %d dephased properly (after %.2lf ps).\n\n",mpi_id_in_gcomm,dephase_local_time);
   
-  md->getState(nullptr,&dephase_e,nullptr,at.get());
+  md->getSimData(nullptr,&dephase_e,nullptr,at.get());
 
 }

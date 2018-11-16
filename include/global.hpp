@@ -14,12 +14,19 @@
 #include <chrono>
 #include <cstdint>
 
-//define where is the null file : should work with any unix-like OS
-#ifdef __unix__
+// Explicitly require UNIX compatibility, otherwise abort compilation asap
+#if defined(unix) || defined(__unix__) || defined(__unix)
+
+// define where is the null file : should work with any unix-like OS
 #define NULLFILE "/dev/null"
-#else //for MS windows (untested, not useful ?)
-#define NULLFILE "nul"
+
+#else
+
+#error "This program can only be compiled on a UNIX-like OS !"
+
 #endif
+
+
 
 /**
  * @brief This can be used for storing either coordinates or velocities, it simply contains an array of 3 doubles.
@@ -239,7 +246,6 @@ struct ENERGIES final
   double etot() const {return ene[2];}   ///< returns constant value of total energy
 
   std::array<double,3> ene;
-  
 };
 
 #endif // GLOBAL_HPP_INCLUDED

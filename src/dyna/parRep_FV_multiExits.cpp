@@ -332,7 +332,7 @@ void ParRepFV_multiExits::do_dynamics_multi_wait()
     LOG_PRINT(LOG_DEBUG,"Worker %d\n",i);
   LOG_FLUSH_ALL();
 #endif
-  
+
   // create the working group and the working communicator : contain all the ranks at the beginning, and some will be removed later
   MPI_Group working_group = MPI_GROUP_NULL;
   MPI_Comm  working_comm = MPI_COMM_NULL;
@@ -358,7 +358,7 @@ void ParRepFV_multiExits::do_dynamics_multi_wait()
     md->doNsteps(dynamics_check);
     dyna_local_time += t_poll;
     
-    md->getState(nullptr,&dyna_e,nullptr,at.get());
+    md->getSimData(nullptr,&dyna_e,nullptr,at.get());
     luaItf->set_lua_variable("epot",dyna_e.epot());
     luaItf->set_lua_variable("ekin",dyna_e.ekin());
     luaItf->set_lua_variable("etot",dyna_e.etot());
@@ -531,7 +531,7 @@ void ParRepFV_multiExits::do_dynamics_multi_clone()
     md->doNsteps(dynamics_check);
     dyna_local_time += t_poll;
     
-    md->getState(nullptr,&dyna_e,nullptr,at.get());
+    md->getSimData(nullptr,&dyna_e,nullptr,at.get());
     luaItf->set_lua_variable("epot",dyna_e.epot());
     luaItf->set_lua_variable("ekin",dyna_e.ekin());
     luaItf->set_lua_variable("etot",dyna_e.etot());
@@ -637,7 +637,7 @@ void ParRepFV_multiExits::do_dynamics_multi_clone()
       
       md->setCrdsVels(at.get());
       
-      md->getState(nullptr,&dyna_e,nullptr,nullptr);
+      md->getSimData(nullptr,&dyna_e,nullptr,nullptr);
       luaItf->set_lua_variable("epot",dyna_e.epot());
       luaItf->set_lua_variable("ekin",dyna_e.ekin());
       luaItf->set_lua_variable("etot",dyna_e.etot());

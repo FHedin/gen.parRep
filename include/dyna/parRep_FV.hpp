@@ -37,30 +37,15 @@ public:
    * @param _at Array of coordinates and velocities
    * @param _md The MD interface
    * @param _luaItf The Lua interface
-   */
-  ParRepFV(DATA& _dat,
-           std::unique_ptr<ATOM[]>& _at,
-           std::unique_ptr<MD_interface>& _md,
-           std::unique_ptr<luaInterface>& _luaItf
-          );
-  
-  /**
-   * @brief The constructor for the F-V parRep variant
+   * @param ignore_parrepabstract_setup Whether the abstract class should ignore some of its initilaisation procedures, in cas the derived class takescare of 
+   *                                    doing it
    * 
-   * This version explictly tells to the ParRepAbstract ctor to ignore its septup of MPI, which is manually done by the derived class
-   * 
-   * NOTE to be used by a derived class only
-   * 
-   * @param _dat Simulation data, see global.hpp
-   * @param _at Array of coordinates and velocities
-   * @param _md The MD interface
-   * @param _luaItf The Lua interface
    */
   ParRepFV(DATA& _dat,
            std::unique_ptr<ATOM[]>& _at,
            std::unique_ptr<MD_interface>& _md,
            std::unique_ptr<luaInterface>& _luaItf,
-           bool ignore_parrepabstract_setup
+           bool ignore_parrepabstract_setup = false
   );
   
   /**
@@ -97,6 +82,7 @@ protected:
   // parameters for Fleming-Viot combined stage
   uint32_t gr_check; ///< frequency at which to accumulate G-R observables 
   uint32_t fv_check; ///< frequency at whick to check if the F-V reference walker left the state
+  uint32_t discard_first_N_grObs;  ///< FV convergence will be tested when at least this amount of observations have already been accumulated
   
   double fv_local_time = 0.; ///< physical time during Fleming Viot procedure
   ENERGIES fv_e;   ///< ENERGIES of the system during Fleming Viot procedure
@@ -114,7 +100,14 @@ protected:
    * a vector of the names used for indexing the above defined map
    */
   const std::vector<GR_function_name>& gr_names;
-
+  
+//   /**
+//    *  the C++ interface for collecting Gelman-Rubin statistics
+//    *  For the moment only rank masterRank will manage it.
+//    *  The others regularly send their data (stored in gr_observations) to rank masterRank
+//    */
+//   std::unique_ptr<GelmanRubinAnalysis> gr = nullptr;
+  
   /*
    * DECLARATIONS : parrep simulation split in several methods
    */

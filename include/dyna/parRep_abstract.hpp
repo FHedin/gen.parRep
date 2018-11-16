@@ -67,52 +67,23 @@ class ParRepAbstract : public ParRepRunnable
 public:
 
   /**
-  * @brief The constructor for an abstract parrep simulation, called by classes inheriting from this one.
-  * 
-  * It will initialise many of the references common to all parrep simulations.
-  * 
-  * it is also in charge of performing some MPI setup.
-  * 
-  * @param _dat Simulation data, see global.hpp
-  * @param _at Array of coordinates and velocities
-  * @param _md The MD interface
-  * @param _luaItf The Lua interface
-  */
-  ParRepAbstract(DATA& _dat,
-                 std::unique_ptr<ATOM[]>& _at,
-                 std::unique_ptr<MD_interface>& _md,
-                 std::unique_ptr<luaInterface>& _luaItf)
-                 : dat(_dat),at(_at),md(_md),luaItf(_luaItf),
-                 params(luaItf->get_parsed_parameters_map()),
-                 lua_state_init(luaItf->get_function_state_init()),
-                 lua_check_state(luaItf->get_function_check_state()),
-                 lua_check_transient(luaItf->get_function_check_transient()),
-                 db_open(luaItf->get_db_open()),
-                 db_close(luaItf->get_db_close()),
-                 db_insert(luaItf->get_db_insert()),
-                 db_backup(luaItf->get_db_backup())
-  {
-    local_setup_done = true;
-    MPI_setup();
-  }
-  
-  /**
    * @brief The constructor for an abstract parrep simulation, called by classes inheriting from this one.
    * 
    * It will initialise many of the references common to all parrep simulations.
    * 
-   * This version ignores the locally defined MPI_setup, and the derived class SHOULD take care of calling it.
+   * It is also in charge of performing some MPI setup.
    * 
    * @param _dat Simulation data, see global.hpp
    * @param _at Array of coordinates and velocities
    * @param _md The MD interface
    * @param _luaItf The Lua interface
+   * @param ignore_local_setup If true do not perform some of the local setup and let the derived class do it
    */
   ParRepAbstract(DATA& _dat,
                  std::unique_ptr<ATOM[]>& _at,
                  std::unique_ptr<MD_interface>& _md,
                  std::unique_ptr<luaInterface>& _luaItf,
-                 bool ignore_local_setup
+                 bool ignore_local_setup=false
                 )
                 : dat(_dat),at(_at),md(_md),luaItf(_luaItf),
                 params(luaItf->get_parsed_parameters_map()),
@@ -124,6 +95,11 @@ public:
                 db_insert(luaItf->get_db_insert()),
                 db_backup(luaItf->get_db_backup())
   {
+    if(ignore_local_setup==false)
+    {
+      local_setup_done = true;
+      MPI_setup();
+    }
   }
   
   /**
@@ -266,7 +242,7 @@ protected:
     md->setSimClockTime(0.);
     
     // get coordinates
-    md->getState(nullptr,&equil_e,nullptr,at.get());
+    md->getSimData(nullptr,&equil_e,nullptr,at.get());
   }
   
   /**
@@ -291,7 +267,7 @@ protected:
       LOG_PRINT(LOG_DEBUG,"Rank %d did %lf ps of transient propagation...\n",mpi_id_in_gcomm,time_spent_in_transient_propagation);
       fprintf(stdout,     "Rank %d did %lf ps of transient propagation...\n",mpi_id_in_gcomm,time_spent_in_transient_propagation);
       
-      md->getState(nullptr,&tr_e,nullptr,at.get());
+      md->getSimData(nullptr,&tr_e,nullptr,at.get());
       luaItf->set_lua_variable("epot",tr_e.epot());
       luaItf->set_lua_variable("ekin",tr_e.ekin());
       luaItf->set_lua_variable("etot",tr_e.etot());
@@ -304,8 +280,10 @@ protected:
     
     ref_clock_time += time_spent_in_transient_propagation;
     
-    LOG_PRINT(LOG_INFO,"Rank %d found a new metastable state after %lf ps of transient propagation!\n",mpi_id_in_gcomm,time_spent_in_transient_propagation);
-    fprintf(stdout,    "Rank %d found a new metastable state after %lf ps of transient propagation!\n",mpi_id_in_gcomm,time_spent_in_transient_propagation);
+    LOG_PRINT(LOG_INFO,"Rank %d entered a new metastable state after %lf ps of transient propagation!\n",
+              mpi_id_in_gcomm,time_spent_in_transient_propagation);
+    fprintf(stdout,    "Rank %d entered a new metastable state after %lf ps of transient propagation!\n",
+            mpi_id_in_gcomm,time_spent_in_transient_propagation);
 
   }
   
@@ -317,7 +295,7 @@ protected:
   {
     bool needToBreak = false;
     MPI_Win break_window = MPI_WIN_NULL;
-    MPI_Request ibarrier_req = MPI_REQUEST_NULL;
+//     MPI_Request ibarrier_req = MPI_REQUEST_NULL;
     
     // NOTE there is an implicit barrier in MPI_Win_create
     MPI_Win_create(&needToBreak,sizeof(bool),sizeof(bool),
@@ -331,14 +309,14 @@ protected:
       // do some steps
       md->doNsteps(dynamics_check);
       
-      MPI_Wait(&ibarrier_req,MPI_STATUS_IGNORE);
-      
-      if(needToBreak)
-        break;
+//       MPI_Wait(&ibarrier_req,MPI_STATUS_IGNORE);
+//       
+//       if(needToBreak)
+//         break;
       
       dyna_local_time += t_poll;
       
-      md->getState(nullptr,&dyna_e,nullptr,at.get());
+      md->getSimData(nullptr,&dyna_e,nullptr,at.get());
       luaItf->set_lua_variable("epot",dyna_e.epot());
       luaItf->set_lua_variable("ekin",dyna_e.ekin());
       luaItf->set_lua_variable("etot",dyna_e.etot());
@@ -376,7 +354,9 @@ protected:
       }
       
       // instead use a non blocking barrier and check after the next doNsteps in order to hide the sync cost behind computations
-      MPI_Ibarrier(global_comm,&ibarrier_req);
+//       MPI_Ibarrier(global_comm,&ibarrier_req);
+      
+      MPI_Barrier(global_comm);
       
       if(needToBreak)
         break;
@@ -396,10 +376,7 @@ protected:
     /*
      * the breaker waits here, the others should arrive as soon has they are notified via needToBreak, which will at most take one more
      * md evaluation (dynamics_check)
-     * 
-     * A wait is required before the barrier from properly releasing memory 
      */
-    MPI_Wait(&ibarrier_req,MPI_STATUS_IGNORE);
     MPI_Barrier(global_comm);
     
     MPI_Win_free(&break_window);

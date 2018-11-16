@@ -19,7 +19,6 @@
 *
 *   \details This will control what is written
 *   to logging files ; those files are named :
-*   \li error.log
 *   \li warning.log
 *   \li info.log
 *   \li debug.log
@@ -30,8 +29,6 @@
 *
 *   The different levels, members of the \b enum \b #LOG_LEVELS are :
 *   \li \b #LOG_NOTHING : At this level there is no logging at all.
-*   \li \b #LOG_ERROR : An Error is a critical event which will cause the program to abort immediately,
-*       for example a missing parameter for which no default value is provided.
 *   \li \b #LOG_WARNING : A Warning is a non-critical event, i.e. the event is just reported but the program
 *       execution continues, for example a missing or wrong parameter for which a default value is going to be used.
 *   \li \b #LOG_INFO : An Info message reports to the user a possibly useful information, an event with no consequence for the simulation.
@@ -39,19 +36,17 @@
 *   \li \b #LOG_DEBUG : A debug message is really technical and verbose, for example dumping a variable.
 *       This should be enabled for bug tracking.
 *
-*   The logging is progressive, enabling \b #LOG_INFO means that higher levels \b #LOG_ERROR and \b #LOG_WARNING
-*       are also enabled.
+*   The logging is progressive, enabling \b #LOG_INFO means that the higher level \b #LOG_WARNING is also enabled.
 *
 *   The default is set to \b #LOG_WARNING. \n
 *
 */
 enum LOG_LEVELS
 {
-    LOG_NOTHING = 0, /*!< No log file is created : this is not recommended as no information is reported */
-    LOG_ERROR   = 1,   /*!< Only errors are reported to \b error.log */
-    LOG_WARNING = 2, /*!< Warnings are reported to \b warning.log , and also errors to \b error.log. This is the default. */
-    LOG_INFO    = 3,    /*!< Info messages are reported to \b info.log , and also warnings and errors to their respective files. */
-    LOG_DEBUG   = 4 /*!< A large amount of debugging messages are written to \b debug.log . The previous levels are still written to their respective files. */
+    LOG_NOTHING, /*!< No log file is created : this is not recommended as no information is reported */
+    LOG_WARNING, /*!< Warnings are reported to \b warning.log . This is the default. */
+    LOG_INFO,    /*!< Info messages are reported to \b info.log , and also warnings to their respective file. */
+    LOG_DEBUG    /*!< A large amount of debugging messages are written to \b debug.log . The previous levels are still written to their respective files. */
 };
 
 extern LOG_LEVELS LOG_SEVERITY;
@@ -68,7 +63,7 @@ void close_logfiles();
 
 /**
  * \brief   Returns a string corresponding to the logging level.
- * \return An array of char containing the description of the logging level, for example "LOG_ERROR"
+ * \return An array of char containing the description of the logging level, for example "LOG_WARNING"
  */
 const char* get_loglevel_string();
 
@@ -90,7 +85,7 @@ char* get_time();
  * \param fmt A printf like format string
  * \param ... parameters forwarded to vfprintf
  */
-int32_t LOG_PRINT(LOG_LEVELS mesg_severity, const char *fmt, ...);
+void LOG_PRINT(LOG_LEVELS mesg_severity, const char *fmt, ...);
 
 /**
  * @brief Flush all opened files ; slow but useful when debugging if there may be a crash soon...

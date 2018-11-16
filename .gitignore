@@ -1,4 +1,11 @@
-/build
-/testing
 /docs/latex
 /docs/html
+
+.kdev4/
+*.kdev4
+
+build/CMake*
+build/LuaJIT-2.0.5*
+build/Makefile
+build/cmake_install.cmake
+build/openmm-7.3.0*

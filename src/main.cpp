@@ -14,7 +14,6 @@
 #include <cstring>
 
 #include "global.hpp"
-#include "rand.hpp"
 #include "logger.hpp"
 #include "runSim.hpp"
 
@@ -62,9 +61,6 @@ int main(int argc, char* argv[])
   char  mpi_lib_version_string[MPI_MAX_LIBRARY_VERSION_STRING];
   int32_t  str_len = MPI_MAX_LIBRARY_VERSION_STRING;
   MPI_Get_library_version(mpi_lib_version_string,&str_len);
-  
-  fprintf(stdout,"\nRunning program '%s' with MPI Library version '%s', MPI API version is '%d.%d'\n\n",argv[0],mpi_lib_version_string,version,subversion);
-  fprintf(stderr,"\nRunning program '%s' with MPI Library version '%s', MPI API version is '%d.%d'\n\n",argv[0],mpi_lib_version_string,version,subversion);
 
   if(version < 3)
   {
@@ -140,7 +136,7 @@ int main(int argc, char* argv[])
       stdout = freopen(my_name.c_str(),"w",stdout);
     }
     /*
-     * reopen stdout to unique file based on the user specified template name ;
+     * reopen stderr to unique file based on the user specified template name ;
      * expects one dot and an extension at the end (exception: redirection to /dev/null is allowed)
      */
     else if(!strcasecmp(argv[i],"-e"))
@@ -155,10 +151,6 @@ int main(int argc, char* argv[])
       if(!strcasecmp(argv[++i],"no"))
       {
         LOG_SEVERITY = LOG_NOTHING;
-      }
-      else if(!strcasecmp(argv[i],"err"))
-      {
-        LOG_SEVERITY = LOG_ERROR;
       }
       else if(!strcasecmp(argv[i],"warn"))
       {
@@ -194,7 +186,15 @@ int main(int argc, char* argv[])
   MPI_Barrier(MPI_COMM_WORLD);
   
   //prepare log files if necessary
-  init_logfiles();
+  try
+  {
+    init_logfiles();
+  }
+  catch(exception& e)
+  {
+    fprintf(stderr,"std::exception captured when initializing log files ! Error message is %s \n\n",e.what());
+    MPI_CUSTOM_ABORT_MACRO();
+  }
   MPI_Barrier(MPI_COMM_WORLD);
   
   if(my_id==0)
@@ -207,18 +207,6 @@ int main(int argc, char* argv[])
     fprintf(stdout,"PWD : %s\n",getenv("PWD"));
   }
 
-  /*
-   * Each MPI rank will initialise its own random numbers generator ; see rand.hpp
-   */
-  init_rand();
-  
-  LOG_PRINT(LOG_INFO,"Rank %d properly initialised its mt19937 random numbers generator\n");
-  LOG_PRINT(LOG_DEBUG,"5 random uint32_t from rank %d : %u %u %u %u %u\n",my_id,get_uint32(),
-            get_uint32(),get_uint32(),get_uint32(),get_uint32()
-  );
-  
-  MPI_Barrier(MPI_COMM_WORLD);
-  
   // run the simulation
   const string input(inpf);
   run_simulation(input);
@@ -249,8 +237,8 @@ int main(int argc, char* argv[])
 void help(char *argv[])
 {
   fprintf(stdout,"Need at least one argument : %s -i an_input_file\n",argv[0]);
-  fprintf(stdout,"optional args : -o [stdout_to_file] -e [stderr_to_file] -log [logging level, one of { no | err | warn | info | dbg }] \n");
-  fprintf(stdout,"Example : \n %s -i input_file -seed 1330445520 -o out.txt -log info \n\n",argv[0]);
+  fprintf(stdout,"optional args : -o [stdout_to_file] -e [stderr_to_file] -log [logging level, one of { no | warn | info | dbg }] \n");
+  fprintf(stdout,"Example : \n %s -i input_file -o out.txt -log info \n\n",argv[0]);
   fprintf(stdout,"The default logging level is 'warn' \n");
 }
 

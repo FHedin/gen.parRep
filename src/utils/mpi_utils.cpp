@@ -24,32 +24,44 @@ void MPIutils::mpi_broadcast_atom_array(DATA& dat, ATOM at[], const int32_t mpi_
             mpi_root,comm);
 }
 
-void MPIutils::mpi_ibroadcast_atom_array(DATA& dat, ATOM at[], const int32_t mpi_root, MPI_Comm& comm)
-{
-  array<MPI_Request,2> reqs = {{MPI_REQUEST_NULL,MPI_REQUEST_NULL}};
-  
-  MPI_Ibcast(&(at[0]),dat.natom*sizeof(ATOM),MPI_BYTE,
-             mpi_root,comm,&(reqs[0]));
-  
-  MPI_Ibcast(dat.pbc.data(),sizeof(dat.pbc),MPI_BYTE,
-             mpi_root,comm,&(reqs[1]));
-  
-  MPI_Waitall(2,reqs.data(),MPI_STATUSES_IGNORE);
-  
-  MPI_Request_free(&reqs[0]);
-  MPI_Request_free(&reqs[1]);
-}
+// void MPIutils::mpi_ibroadcast_atom_array(DATA& dat, ATOM at[], const int32_t mpi_root, MPI_Comm& comm)
+// {
+//   array<MPI_Request,2> reqs = {{MPI_REQUEST_NULL,MPI_REQUEST_NULL}};
+//   
+//   MPI_Ibcast(&(at[0]),dat.natom*sizeof(ATOM),MPI_BYTE,
+//              mpi_root,comm,&(reqs[0]));
+//   
+//   MPI_Ibcast(dat.pbc.data(),sizeof(dat.pbc),MPI_BYTE,
+//              mpi_root,comm,&(reqs[1]));
+//   
+//   MPI_Waitall(2,reqs.data(),MPI_STATUSES_IGNORE);
+//   
+//   MPI_Request_free(&reqs[0]);
+//   MPI_Request_free(&reqs[1]);
+// }
 
-void MPIutils::mpi_ibroadcast_atom_array_nowait(DATA& dat, ATOM at[], const int32_t mpi_root,
-                                                MPI_Comm& comm, MPI_Request* reqA, MPI_Request* reqB)
-{
-  MPI_Ibcast(&(at[0]),dat.natom*sizeof(ATOM),MPI_BYTE,
-             mpi_root,comm,reqA);
-  
-  MPI_Ibcast(dat.pbc.data(),sizeof(dat.pbc),MPI_BYTE,
-             mpi_root,comm,reqB);
-  
-}
+// MPI_Request* MPIutils::mpi_ibroadcast_atom_array_nowait(DATA& dat, ATOM at[], const int32_t mpi_root, MPI_Comm& comm)
+// {
+//   MPI_Ibcast(&(at[0]),dat.natom*sizeof(ATOM),MPI_BYTE,
+//              mpi_root,comm,&(reqs[0]));
+//   
+//   MPI_Ibcast(dat.pbc.data(),sizeof(dat.pbc),MPI_BYTE,
+//              mpi_root,comm,&(reqs[1]));
+//   
+//   return reqs.data();
+// 
+// }
+
+// void MPIutils::mpi_ibroadcast_atom_array_nowait(DATA& dat, ATOM at[], const int32_t mpi_root,
+//                                                 MPI_Comm& comm, MPI_Request* reqA, MPI_Request* reqB)
+// {
+//   MPI_Ibcast(&(at[0]),dat.natom*sizeof(ATOM),MPI_BYTE,
+//              mpi_root,comm,reqA);
+//   
+//   MPI_Ibcast(dat.pbc.data(),sizeof(dat.pbc),MPI_BYTE,
+//              mpi_root,comm,reqB);
+//   
+// }
 
 void MPIutils::mpi_get_unique_name(string& orig_name)
 {
@@ -83,10 +95,8 @@ void MPIutils::mpi_abort_commworld_with_message(const char* fileName, const char
   
   fprintf(stdout,"%s\n",message.c_str());
   fprintf(stderr,"%s\n",message.c_str());
-  
-  LOG_PRINT(LOG_ERROR,"%s\n",message.c_str());
-  
-  LOG_FLUSH_ALL();
+
+  close_logfiles();
   
   MPI_Abort(MPI_COMM_WORLD,-1);
 }

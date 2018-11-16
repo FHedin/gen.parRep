@@ -17,6 +17,9 @@ max_run_time_hours = 24.0 -- default if not set in this script will be 24 hours
 --  useful for large systems if the I/O may take some time; should be at least 1 minute, and no fractional value allowed
 minutes_to_stop_before_max_run_time = 1 -- default if not set in this script will be 5 minutes
 
+-- This uses OpenMM as MD engine
+MD_Engine = "OpenMM"
+
 -- OpenMM platform to use
 --  AUTO : let OpenMM find the fastest platform (default)
 --  REF  : on cpu, not optimised, not parallellised : slow !
@@ -28,6 +31,35 @@ minutes_to_stop_before_max_run_time = 1 -- default if not set in this script wil
 OMMplatform = "CPU"
 -- OMMplatform = "OCL"
 -- OMMplatform = "CUDA"
+
+-- We can define here in an array extra platform specific properties passed to OpenMM
+--  see http://docs.openmm.org/latest/userguide/library.html#platform-specific-properties
+--  for a list of OpenMM platform specific properties 
+-- Internally coerced to a std::map<std::string,std::string> so use a string for indexing (key, before the =)
+--  and also be sure to define the values (after the =) also as strings (wrapped within ""), even if it is an integer
+
+-- REF platform has no extra properties
+-- ...
+
+-- CPU platform properties : Threads = "1" is equivalent to defining OPENMM_CPU_THREADS=1 in the environnment
+OMMplatform_properties = { Threads = "1"}
+
+-- OpenCL platform properties
+-- OMMplatform_properties = { 
+--   Precision = "mixed", -- or "single" or "double"
+--   UseCpuPme = "false", -- or true
+--   OpenCLPlatformIndex = "0",
+--   DeviceIndex = "0"
+-- }
+
+-- CUDA platform properties
+-- OMMplatform_properties = {
+--   Precision = "mixed", -- or "single" or "double"
+--   UseCpuPme = "false", -- or "true"
+--   DeviceIndex = "0",
+-- --   CudaCompiler = "/path/to/nvcc",
+--   UseBlockingSync = "false" -- or "true"
+-- }
 
 -- load the integrator parameters from a serialised OpenMM XML file ;
 -- no default, error if undefined
@@ -58,19 +90,6 @@ equilibrationSteps = 0
 --  it gives to total simulation time
 -- no default, error if undefined
 numSteps = 100e6
-
--- parameters for the SQLite3 database used for storing information about parRep states
--- The database is stored in memory for performance, but a backup is regularly performed to file 'name'
--- defaults are : database={name="run.db",backupFrequency=500.0}
-database = 
-{
-  -- Because the structure of the algorithms, each MPI rank will have its own database and each will be saved to an altered
-  --  fileName where the MPI rank id is added; for instance with name='run.db'
-  --  files 'run.0.db', 'run.1.db', ... would be generated i.e. id is inserted before extension dot
-  name = "ala2vac.db",
-  -- frequency, in ps, at which to backup the database to a file
-  backupFrequency = 10 -- 10 ps
-}
 
 -- Define the type of ParRep simulation to perform, and provide its parameters
 --  only one of the two following tables should be defined
@@ -330,12 +349,11 @@ function state_init()
   
 end
 
--- You may create as many functions as you want and call them from check_state_left(),
---  but the c++ code will in the end only call check_state_left()
-
 -- this function is mandatory and called from C++, program will fail if not defined
 --  it should take no arguments
 --  it should return a boolean : true in case the dynamics left the state, false otherwise
+-- You may create as many functions as you want and call them from check_state_left(),
+--  but the c++ code will in the end only call check_state_left()
 function check_state_left()
 
   -- value of the phi and psi dihedral angles of ala2 at a given time value
@@ -359,6 +377,16 @@ function check_state_left()
 
 end
 
+-- this function is mandatory and called from C++, program will fail if not defined
+--  it should take no arguments
+--  it should return a boolean : true in case the system is currently outside of any of the known states, false otherwise
+-- If the configuration space is a partition the system enters a new state as soon as it exits another,
+--  and therefore this function can just return false without doing anything
+function check_transient_propagation_required()
+  -- we have partitioned the (phi,psi) configuration space in two states so this returns false
+  return false
+end
+
 --------------------------------------------------------------------------------------------------------------
 -- --------------- DATABASE OF STATES STORAGE FUNCTIONS ------------------------------
 --------------------------------------------------------------------------------------------------------------
@@ -374,104 +402,108 @@ end
 --
 -- if not defined within this file there are default empty functions defined, doing nothing
 
-SQLiteDB={}
+-- only rank 0 manages a database
+if(mpi_rank_id==0)
+then
 
-SQLiteDB.insert_statement_states  = [[ INSERT INTO STATES (PARREP_DONE,REF_TIME,ESC_TIME,STATE_FROM,STATE_TO,TAU)
-                                                   VALUES ($lprep,$reft,$esct,$state_from,$state_to,$tau); ]]
-
-SQLiteDB.insert_statement_crdvels = [[ INSERT INTO CRDVELS (ID,X,Y,Z,VX,VY,VZ)
-                                                   VALUES ($id,$x,$y,$z,$vx,$vy,$vz); ]]
-
-function SQLiteDB.open()
-
-  print('Lua SQLite3 opening an in-memory db on rank ',mpi_rank_id,' of ',mpi_num_ranks-1)
+  -- parameters for the SQLite3 database used for storing information about parRep states
+  -- The database is stored in memory for performance, but a backup is regularly performed to file 'name'
+  -- defaults are : database={name="run.db",backupFrequency=500.0}
+  database = 
+  {
+    -- Because the structure of the algorithms, each MPI rank will have its own database and each will be saved to an altered
+    --  fileName where the MPI rank id is added; for instance with name='run.db'
+    --  files 'run.0.db', 'run.1.db', ... would be generated i.e. id is inserted before extension dot
+    name = "ala2vac.db",
+    -- frequency, in ps, at which to backup the database to a file
+    backupFrequency = 10 -- 10 ps
+  }
   
-  database.backup_name = string.gsub(database.name,'%.','.'..mpi_rank_id..'.',1)
-  
-  -- open in memory database and enable foreign keys
-  SQLiteDB.db = sqlite3.open_memory()
-  SQLiteDB.db:exec("PRAGMA foreign_keys = ON;")
+  SQLiteDB.insert_statement_states  = [[ INSERT INTO STATES (PARREP_DONE,REF_TIME,ESC_TIME,STATE_FROM,STATE_TO,TAU)
+                                                    VALUES ($lprep,$reft,$esct,$state_from,$state_to,$tau); ]]
 
-  -- create the states table : it contains the escape time for this state
-  SQLiteDB.db:exec[[ CREATE TABLE STATES(
-                      ID          INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-                      PARREP_DONE INTEGER NOT NULL,
-                      REF_TIME    REAL,
-                      ESC_TIME    REAL,
-                      STATE_FROM  TEXT,
-                      STATE_TO    TEXT,
-                      TAU         REAL); ]]
+  SQLiteDB.insert_statement_crdvels = [[ INSERT INTO CRDVELS (ID,X,Y,Z,VX,VY,VZ)
+                                                    VALUES ($id,$x,$y,$z,$vx,$vy,$vz); ]]
 
-  -- create the crdvels table : it contains coordinates and velocities of the system for a given 'states' record
-  SQLiteDB.db:exec[[ CREATE TABLE CRDVELS(
-                      ID INTEGER NOT NULL,
-                      X   REAL,
-                      Y   REAL,
-                      Z   REAL,
-                      VX  REAL,
-                      VY  REAL,
-                      VZ  REAL,
-                      FOREIGN KEY(ID) REFERENCES STATES(ID) ); ]]
+  function SQLiteDB.open()
 
-  SQLiteDB.backup_to_file()
-
-end
-
-function SQLiteDB.close()
-
-  print('Lua SQLite3 closing in-memory db on rank ',mpi_rank_id,' of ',mpi_num_ranks-1)
-  SQLiteDB.db:close()
-
-end
-
-local stateID=0
-
--- the first three arguments are always provided from c++ code
--- extra arguments might be provided by the ... and should be retrieved from Lua's side using the ... special token, converted to a table (see args below)
-function SQLiteDB.insert_state(parRepDone,tauTime,escapeTime)
-  
-  local ref_time=referenceTime
-  local from=fromState
-  local to=toState
-
-  local stmt = SQLiteDB.db:prepare(SQLiteDB.insert_statement_states)
-  stmt:bind_names{lprep=parRepDone, reft=ref_time, esct=escapeTime, state_from=from, state_to=to, tau=tauTime}
-  stmt:step()
-  stmt:finalize()
-  
-  stateID = stateID+1
-  
-  for n=1,natoms
-  do
-    local x,y,z = get_coordinates(n)
-    local vx,vy,vz = get_velocities(n)
+    print('Lua SQLite3 opening an on-disk db named ',database.name)
     
-    stmt = SQLiteDB.db:prepare(SQLiteDB.insert_statement_crdvels)
-    stmt:bind_names{ id=stateID, x=x, y=y, z=z, vx=vx, vy=vy, vz=vz }
+    -- open in memory database and enable foreign keys
+    SQLiteDB.db = sqlite3.open(database.name)
+    SQLiteDB.db:exec("PRAGMA foreign_keys = ON;")
+    
+    SQLiteDB.db:exec("BEGIN TRANSACTION;")
+
+    -- create the states table : it contains the escape time for this state
+    SQLiteDB.db:exec[[ CREATE TABLE STATES(
+                        ID          INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        PARREP_DONE INTEGER NOT NULL,
+                        REF_TIME    REAL,
+                        ESC_TIME    REAL,
+                        STATE_FROM  TEXT,
+                        STATE_TO    TEXT,
+                        TAU         REAL); ]]
+
+    -- create the crdvels table : it contains coordinates and velocities of the system for a given 'states' record
+    SQLiteDB.db:exec[[ CREATE TABLE CRDVELS(
+                        ID INTEGER NOT NULL,
+                        X   REAL,
+                        Y   REAL,
+                        Z   REAL,
+                        VX  REAL,
+                        VY  REAL,
+                        VZ  REAL,
+                        FOREIGN KEY(ID) REFERENCES STATES(ID) ); ]]
+
+    SQLiteDB.db:exec("END TRANSACTION;")
+
+  end
+
+  function SQLiteDB.close()
+
+    print('Lua SQLite3 closing db on rank ',mpi_rank_id)
+    SQLiteDB.db:close()
+
+  end
+
+  local stateID=0
+
+  -- the first three arguments are always provided from c++ code
+  -- extra arguments might be provided by the ... and should be retrieved from Lua's side using the ... special token, converted to a table (see args below)
+  function SQLiteDB.insert_state(parRepDone,tauTime,escapeTime)
+    
+    local ref_time=referenceTime
+    local from=fromState
+    local to=toState
+
+    SQLiteDB.db:exec("BEGIN TRANSACTION;")
+    
+    local stmt = SQLiteDB.db:prepare(SQLiteDB.insert_statement_states)
+    stmt:bind_names{lprep=parRepDone, reft=ref_time, esct=escapeTime, state_from=from, state_to=to, tau=tauTime}
     stmt:step()
     stmt:finalize()
     
+    stateID = stateID+1
+    
+    for n=1,natoms
+    do
+      local x,y,z = get_coordinates(n)
+      local vx,vy,vz = get_velocities(n)
+      
+      stmt = SQLiteDB.db:prepare(SQLiteDB.insert_statement_crdvels)
+      stmt:bind_names{ id=stateID, x=x, y=y, z=z, vx=vx, vy=vy, vz=vz }
+      stmt:step()
+      stmt:finalize()
+      
+    end
+    
+    SQLiteDB.db:exec("END TRANSACTION;")
+
   end
 
-end
-
-function SQLiteDB.backup_to_file()
-
-  local back_db = sqlite3.open(database.backup_name)
-  back_db:exec("PRAGMA foreign_keys = ON;")
-
-  local backup = sqlite3.backup_init(back_db,"main",SQLiteDB.db,"main")
-  local ret = backup:step(-1)
-  if ret==sqlite3.DONE then
-    print('Lua SQLite3 performed db backup to file ',database.backup_name,' successfully, at time : ',referenceTime,' ps')
-  else
-    print('Lua SQLite3 had problem when performing backup to file ',database.backup_name,' error is : ',back_db:errmsg())
-  end
-
-  backup:finish()
-
-end
-
+end -- if(mpi_rank_id==0)
+  
 --------------------------------------------------------------------------------------------------------------
 -- --------------- GELMAN RUBIN FUNCTIONS ESTIMATING OBSERVABLES ------------------------------
 --------------------------------------------------------------------------------------------------------------

@@ -22,11 +22,8 @@ project(${TGT} C CXX)
 # Some of the following are required for building the project, if not found you will have to install them manually 
 find_package(OpenMM REQUIRED)
 find_package(MPI REQUIRED)
-find_package(LuaJIT)
-if(NOT LUAJIT_FOUND)
-  find_package(Lua REQUIRED)
-endif()
-find_package(sqlite3)
+find_package(LuaJIT REQUIRED)
+find_package(sqlite3 REQUIRED)
 
 # list of include folders with .h/.hpp files
 include_directories(
@@ -34,6 +31,7 @@ include_directories(
 ${MPI_INCLUDE_PATH}
 ${OpenMM_INCLUDE_DIR}
 ${LUA_INCLUDE_DIR}
+${SQLITE3_INCLUDE_DIRS}
 # project files
 include
 include/dyna
@@ -42,11 +40,6 @@ include/utils
 # external headers (dependancies provided with this project)
 external/sol2
 )
-
-# if sqlite3 requires to be locally built
-if(SQLITE3_FOUND)
-  include_directories(${SQLITE3_INCLUDE_DIRS})
-endif()
 
 # list all source files
 set(
@@ -63,6 +56,7 @@ src/dyna/parRep.cpp
 src/dyna/parRep_FV.cpp
 src/dyna/parRep_FV_multiExits.cpp
 # MD engine interfaces files
+src/md/md_interface.cpp
 src/md/omm_interface.cpp
 # utilities files
 src/utils/mpi_utils.cpp
@@ -71,43 +65,29 @@ src/utils/lua_interface.cpp
 external/luasqlite3/lsqlite3.c
 )
 
-if(NOT SQLITE3_FOUND)
-  include_directories(external/sqlite3)
-  set(SRCS ${SRCS} external/sqlite3/sqlite3.c)
-endif()
-
 add_executable(${TGT} ${SRCS})
 
 set(cWarnings "-Wall -Wextra")
 # more warnings for c++
 # set(cxxWarnings "-Wall -Wextra -Wformat=2 -Wshadow -Wconversion -Wuseless-cast")
-set(cxxWarnings "-Wall -Wextra")
+set(cxxWarnings "-Wall -Wextra -Wno-reorder")
 
-# set(cFeatures   "-fstack-protector-all -fstack-check")
-# set(cxxFeatures "-fstack-protector-all -fstack-check")
-
-# enabling -ffast-math may provide extra performance by enabling supplementary vectorization
-#set(cFeatures   "-ffast-math -fopt-info-vec")
-#set(cxxFeatures "-ffast-math -fopt-info-vec")
-
-# may be required when using clang
-#set(cxxFeatures "-stdlib=libstdc++")
+set(cFeatures   "-ffast-math")
+# This is required if we try to bind the executable to a binary version of the OpenMM library compiled either with  g++ < 5 or with clang
+set(cxxFeatures "-ffast-math -D_GLIBCXX_USE_CXX11_ABI=0")
 
 # C compiler flags
-set(CMAKE_C_FLAGS_DEBUG          "-std=c11 ${cWarnings} ${cFeatures} -O0 -g -DPARREP_DEBUG_BUILD")
-set(CMAKE_C_FLAGS_RELEASE        "-std=c11 ${cWarnings} ${cFeatures} -O3    -march=native")
-set(CMAKE_C_FLAGS_RELWITHDEBINFO "-std=c11 ${cWarnings} ${cFeatures} -O2 -g -march=native")
-set(CMAKE_C_FLAGS_MINSIZEREL     "-std=c11 ${cWarnings} ${cFeatures} -Os -s -march=native")
+set(CMAKE_C_FLAGS                "-fopenmp -std=c11 ${cWarnings} ${cFeatures}")
+set(CMAKE_C_FLAGS_DEBUG          "-O0 -g -DPARREP_DEBUG_BUILD")
+set(CMAKE_C_FLAGS_RELEASE        "-O3    -march=native")
+set(CMAKE_C_FLAGS_RELWITHDEBINFO "-O2 -g -march=native")
+set(CMAKE_C_FLAGS_MINSIZEREL     "-Os -s -march=native")
 
 # C++ compiler flags
-set(CMAKE_CXX_FLAGS_DEBUG          "-std=c++14 ${cxxWarnings} ${cxxFeatures} -O0 -g -DPARREP_DEBUG_BUILD")
-set(CMAKE_CXX_FLAGS_RELEASE        "-std=c++14 ${cxxWarnings} ${cxxFeatures} -O3    -march=native")
-set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-std=c++14 ${cxxWarnings} ${cxxFeatures} -O2 -g -march=native")
-set(CMAKE_CXX_FLAGS_MINSIZEREL     "-std=c++14 ${cxxWarnings} ${cxxFeatures} -Os -s -march=native")
+set(CMAKE_CXX_FLAGS                "-fopenmp -std=c++14 ${cxxWarnings} ${cxxFeatures}")
+set(CMAKE_CXX_FLAGS_DEBUG          "-O0 -g -DPARREP_DEBUG_BUILD")
+set(CMAKE_CXX_FLAGS_RELEASE        "-O3    -march=native")
+set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -g -march=native")
+set(CMAKE_CXX_FLAGS_MINSIZEREL     "-Os -s -march=native")
 
-target_link_libraries(${TGT} ${OpenMM_LIBRARY} ${LUA_LIBRARIES} ${MPI_LIBRARIES} dl pthread)
-
-if(SQLITE3_FOUND)
-  target_link_libraries (${TGT} ${SQLITE3_LIBRARIES})
-endif()
-
+target_link_libraries(${TGT} ${OpenMM_LIBRARY} ${LUA_LIBRARIES} ${MPI_LIBRARIES} ${SQLITE3_LIBRARIES})
