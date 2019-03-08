@@ -4,7 +4,7 @@
  * \author Florent Hédin
  * \author Tony Lelièvre
  * \author École des Ponts - ParisTech
- * \date 2016-2018
+ * \date 2016-2019
  */
 
 #include <cstdio>
@@ -19,10 +19,10 @@
 
 using namespace std;
 
-GelmanRubinAnalysis::GelmanRubinAnalysis(const uint32_t _num_chains, const uint32_t _discard)
+GelmanRubinAnalysis::GelmanRubinAnalysis(const uint32_t _num_chains, const uint32_t _no_convergence_if_less_than)
 {
   num_chains = _num_chains;
-  discard_first = _discard;
+  min_num_observations_before_check = _no_convergence_if_less_than;
   
   // allocate one map<string,Observable> per chain
   observablesList = unique_ptr<std::map<std::string,Observable>[]>(new map<string,Observable>[num_chains]);
@@ -40,6 +40,7 @@ void GelmanRubinAnalysis::registerObservable(const Observable& obs, const double
   }
   
   tolerance[obs.get_name()] = tol;
+  
   obsTypes.push_back(obs.get_name());
 }
 
@@ -116,7 +117,8 @@ void GelmanRubinAnalysis::addNObservations(const std::string& obName,
                                            const uint32_t chain_id)
 {
   map<string,Observable>& chainObsList = observablesList[chain_id];
-  chainObsList[obName].add(from,to);
+  const vector<double> tmp(from,to);
+  chainObsList[obName].add(tmp);
 }
 
 void GelmanRubinAnalysis::updateStatistics()
@@ -180,7 +182,7 @@ void GelmanRubinAnalysis::describeChain(const uint32_t chain_id)
 
 void GelmanRubinAnalysis::describe()
 {
-  LOG_PRINT(LOG_DEBUG,"GelmanRubinAnalysis desciption :\n");
+  LOG_PRINT(LOG_INFO,"GelmanRubinAnalysis desciption :\n");
   
   for(string& name : obsTypes)
   {
@@ -193,18 +195,23 @@ void GelmanRubinAnalysis::describe()
 
 double GelmanRubinAnalysis::get_ratio(string& obName)
 {
-  double lratio = ratio[obName].back();
+  const double lratio = ratio[obName].back();
   return lratio;
 }
 
 bool GelmanRubinAnalysis::check_convergence(const string& obName)
 {
   
-  vector<double>& rvec = ratio[obName];
+  const vector<double>& rvec = ratio[obName];
+  const Observable& obs = observablesList[0][obName];
+  const uint32_t num_obs_accumulated = (uint32_t) obs.get_numObs();
   
   bool check;
-  if(rvec.size() < discard_first)
+  if(num_obs_accumulated < min_num_observations_before_check)
+  {
+    LOG_PRINT(LOG_DEBUG,"Only %u observations available for observable %s, but the user required to only calculate the ratio when at least %u are available, therefore convergence is forced to be false.",num_obs_accumulated,obName.c_str(),min_num_observations_before_check);
     check = false;
+  }
   else
     check = (fabs(1.0-rvec.back()) < tolerance[obName])? true : false ;
   
@@ -266,4 +273,7 @@ void GelmanRubinAnalysis::reset_all_chains()
     ratio[st].resize(0);
     ratio[st].shrink_to_fit();
   }
+  
+  
+  
 }

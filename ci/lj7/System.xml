@@ -1,0 +1,36 @@
+<?xml version="1.0" ?>
+<System openmmVersion="7.3" type="System" version="1">
+	<PeriodicBoxVectors>
+		<A x="20" y="0" z="0"/>
+		<B x="0" y="20" z="0"/>
+		<C x="0" y="0" z="20"/>
+	</PeriodicBoxVectors>
+	<Particles>
+		<Particle mass="39.948"/>
+		<Particle mass="39.948"/>
+		<Particle mass="39.948"/>
+		<Particle mass="39.948"/>
+		<Particle mass="39.948"/>
+		<Particle mass="39.948"/>
+		<Particle mass="39.948"/>
+	</Particles>
+	<Constraints/>
+	<Forces>
+		<Force alpha="0" cutoff="1" dispersionCorrection="0" ewaldTolerance=".0005" forceGroup="0" ljAlpha="0" ljnx="0" ljny="0" ljnz="0" method="0" nx="0" ny="0" nz="0" recipForceGroup="-1" rfDielectric="78.3" switchingDistance="-1" type="NonbondedForce" useSwitchingFunction="0" version="3">
+			<GlobalParameters/>
+			<ParticleOffsets/>
+			<ExceptionOffsets/>
+			<Particles>
+				<Particle eps=".99607255958" q="0" sig=".3405"/>
+				<Particle eps=".99607255958" q="0" sig=".3405"/>
+				<Particle eps=".99607255958" q="0" sig=".3405"/>
+				<Particle eps=".99607255958" q="0" sig=".3405"/>
+				<Particle eps=".99607255958" q="0" sig=".3405"/>
+				<Particle eps=".99607255958" q="0" sig=".3405"/>
+				<Particle eps=".99607255958" q="0" sig=".3405"/>
+			</Particles>
+			<Exceptions/>
+		</Force>
+		<Force forceGroup="0" frequency="100" type="CMMotionRemover" version="1"/>
+	</Forces>
+</System>

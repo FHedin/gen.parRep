@@ -32,7 +32,7 @@
 
 using namespace std;
 
-void run_simulation(const string& inpf)
+void run_simulation(const string& inpf, const std::string& seeds_inp_file, const std::string& seeds_out_file)
 {
   /* find out MY process ID, and how many processes were started. */
   int32_t my_id     = -1;
@@ -43,27 +43,46 @@ void run_simulation(const string& inpf)
   /*
    * Each MPI rank will initialise its own random numbers generator ; see rand.hpp
    */
-  init_rand();
   
-  /*
-   * This is how to initialize the random generators providing seeds manually (at least 5 seeds of type uint64_t encodes as a comma separated string)
-   * 
-   * ATTENTION Using the directly the following line would be wrong because all the random generators on all
-   *           MPI ranks would be initialised with the same seeds !!! Each rank should use a modified vrsion of those seeds.
-   * 
-   *   const string ten_seeds = "12813764096581876017,1660537369292506360,10652021971297968194,"
-   *    "1632182917282226681,2681620832946811191,11894265520984226376,"
-   *    "8987030001799979889,7928564290642933391,6948006017539476486,1814061233159141676";
-   * 
-   *    init_rand(ten_seeds);
-   * 
-   */
+  const bool load_seeds = (seeds_inp_file != NULLFILE);
+  const bool save_seeds = (seeds_out_file != NULLFILE);
 
+  try
+  {
+    if(load_seeds)
+    {
+      // seeds for all the ranks will be read from the file 'seeds_inp_file'
+      init_rand(SEEDS_IO::LOAD_FROM_FILE,seeds_inp_file);
+      fprintf(stdout,"All seeds for all ranks have been read from file %s\n",seeds_inp_file.c_str());
+    }
+    else if(save_seeds)
+    {
+      //Seeds from all the ranks will be written to the file 'seeds_out_file' for re-use
+      init_rand(SEEDS_IO::SAVE_TO_FILE,seeds_out_file);
+      fprintf(stdout,"All seeds from all ranks have been saved to file %s\n",seeds_out_file.c_str());
+    }
+    else
+    {
+      init_rand(SEEDS_IO::NONE);
+      fprintf(stdout,       "Random Seeds internally generated but not saved to a file, no reproducibility will be possible for this run !!\n");
+      LOG_PRINT(LOG_WARNING,"Random Seeds internally generated but not saved to a file, no reproducibility will be possible for this run !!\n");
+    }
+  }
+  catch(exception& e)
+  {
+    fprintf(stderr,"std::exception captured on rank %d when initialising random numbers generator !\n",my_id);
+    fprintf(stderr,"Error message is : %s\n",e.what());
+    fprintf(stderr,"Now flushing files and terminating all other MPI ranks...\n");
+    LOG_FLUSH_ALL();
+    MPI_CUSTOM_ABORT_MACRO();
+  }
+  
   fprintf(stdout,"Rank %d properly initialised its mt19937 random numbers generator\n",my_id);
+  
   fprintf(stdout,"5 random uint32_t from rank %d : %u %u %u %u %u\n",my_id,get_uint32(),
           get_uint32(),get_uint32(),get_uint32(),get_uint32());
   
-  MPI_Barrier(MPI_COMM_WORLD);
+//   MPI_Barrier(MPI_COMM_WORLD);
   
   // stores simulation parameters
   DATA dat;
@@ -219,6 +238,10 @@ void run_simulation(const string& inpf)
     MPI_CUSTOM_ABORT_MACRO();
   }
 
+  // ready to run sim, flush IO files before and let's start !
+  LOG_FLUSH_ALL();
+  MPI_Barrier(MPI_COMM_WORLD);
+  
   try
   {
     simulation->run();

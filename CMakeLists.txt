@@ -15,6 +15,8 @@ if(NOT CMAKE_BUILD_TYPE)
       FORCE)
 endif()
 
+enable_testing()
+
 set(TGT "parRep" CACHE STRING "The executable name")
 
 project(${TGT} C CXX)
@@ -37,7 +39,7 @@ include
 include/dyna
 include/md
 include/utils
-# external headers (dependancies provided with this project)
+# external headers (dependencies provided with this project)
 external/sol2
 )
 
@@ -61,11 +63,9 @@ src/md/omm_interface.cpp
 # utilities files
 src/utils/mpi_utils.cpp
 src/utils/lua_interface.cpp
-# external dependancies provided with this project
+# external dependencies provided with this project
 external/luasqlite3/lsqlite3.c
 )
-
-add_executable(${TGT} ${SRCS})
 
 set(cWarnings "-Wall -Wextra")
 # more warnings for c++
@@ -90,4 +90,12 @@ set(CMAKE_CXX_FLAGS_RELEASE        "-O3    -march=native")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O2 -g -march=native")
 set(CMAKE_CXX_FLAGS_MINSIZEREL     "-Os -s -march=native")
 
+add_executable(${TGT} ${SRCS})
+
 target_link_libraries(${TGT} ${OpenMM_LIBRARY} ${LUA_LIBRARIES} ${MPI_LIBRARIES} ${SQLITE3_LIBRARIES})
+
+add_test(
+NAME test_ci_ar7_gen.parRep
+COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/ci/run.ci.sh
+WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/ci
+)

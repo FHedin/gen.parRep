@@ -1,0 +1,35 @@
+stages: 
+- build
+- test
+
+variables:
+    MAKE_COMMAND: "make -j 4"
+
+cache: # Directories that need to be kept between the build job and the test job
+    paths:
+    - build/
+
+#----------------------------------------------------------------
+# Linux build/test procedure
+#----------------------------------------------------------------
+
+# Build job
+parrep_build_ubuntu:
+    stage: build
+    tags:
+    - parrep-ubuntu-1604-amd64
+    script:
+    - cd build
+    - bash download_deps_and_run_cmake.sh
+    - make
+
+# Test job
+parrep_test_ubuntu:
+    stage: test
+    tags:
+    - parrep-ubuntu-1604-amd64
+    script:
+    - echo "$PWD"
+    - cd build
+    - ctest -V
+

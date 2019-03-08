@@ -4,7 +4,7 @@
  * \author Florent Hédin
  * \author Tony Lelièvre
  * \author École des Ponts - ParisTech
- * \date 2016-2018
+ * \date 2016-2019
  */
 
 #include <string>
@@ -115,7 +115,9 @@ int main(int argc, char* argv[])
   }
   MPI_Barrier(MPI_COMM_WORLD);
   
-  char inpf[FILENAME_MAX] = "";
+  string input_file = NULLFILE;
+  string seeds_inp_file = NULLFILE;
+  string seeds_out_file = NULLFILE;
 
   // arguments parsing
   for (uint32_t i=1; i<(uint32_t)argc; i++)
@@ -123,7 +125,7 @@ int main(int argc, char* argv[])
     // get name of input file
     if(!strcasecmp(argv[i],"-i"))
     {
-      sprintf(inpf,"%s",argv[++i]);
+      input_file = string(argv[++i]);
     }
     /*
      * reopen stdout to unique file based on the user specified template name ;
@@ -167,6 +169,15 @@ int main(int argc, char* argv[])
       else
         fprintf(stdout,"[Warning] Unknown log level '%s' : default value used.\n\n",argv[i]);
     }
+    // in or out files where random seeds are read/written
+    else if( !strcasecmp(argv[i],"--inp-seeds") )
+    {
+      seeds_inp_file = string(argv[++i]);
+    }
+    else if( !strcasecmp(argv[i],"--out-seeds") )
+    {
+      seeds_out_file = string(argv[++i]);
+    }
     // print help and proper exit
     else if( !strcasecmp(argv[i],"-h") || !strcasecmp(argv[i],"-help") || !strcasecmp(argv[i],"--help") )
     {
@@ -208,8 +219,7 @@ int main(int argc, char* argv[])
   }
 
   // run the simulation
-  const string input(inpf);
-  run_simulation(input);
+  run_simulation(input_file,seeds_inp_file,seeds_out_file);
 
   // closing log files is the last thing to do as errors may occur at the end
   close_logfiles();
@@ -237,9 +247,11 @@ int main(int argc, char* argv[])
 void help(char *argv[])
 {
   fprintf(stdout,"Need at least one argument : %s -i an_input_file\n",argv[0]);
-  fprintf(stdout,"optional args : -o [stdout_to_file] -e [stderr_to_file] -log [logging level, one of { no | warn | info | dbg }] \n");
-  fprintf(stdout,"Example : \n %s -i input_file -o out.txt -log info \n\n",argv[0]);
+  fprintf(stdout,"optional args : -o [stdout_to_file] -e [stderr_to_file] -log [logging level, one of { no | warn | info | dbg }] --inp-seeds [seed_file] --out-seeds [seed_file]\n");
+  fprintf(stdout,"Examples : \n\t%s -i input_file -o out.txt -log info --inp-seeds seeds.bin \n",argv[0]);
+  fprintf(stdout,"\t%s -i input_file -o out.txt -log info --out-seeds seeds.bin \n",argv[0]);
   fprintf(stdout,"The default logging level is 'warn' \n");
+  fprintf(stdout,"See the documentation for more details. \n");
 }
 
 /*!
@@ -257,6 +269,9 @@ void help(char *argv[])
  *
  * This software is a new implementation of the Generalized parallel replica method, targeting
  * frequently encountered metastable biochemical systems.
+ * It was used in version v1.0.0 for producing all the simulations published in : 
+ * 
+ *  <a href="https://doi.org/10.1016/j.cpc.2019.01.005">https://doi.org/10.1016/j.cpc.2019.01.005</a>
  * 
  * \image html  main.png
  * \image latex main.pdf

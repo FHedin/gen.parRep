@@ -184,7 +184,7 @@ simulation =
 -- get_minimised_energy(tolerance,maxSteps) : this function returns the minimised energy of the system, using the OpenMM L-BFGS minimiser
 --  note that coordinates are not affected, it just returns the minimum epot of the bassin in which dynamics currently evolves
 --  it returns a 3-tuple ep,ek,et (potential, kinetic and total energy)
---  the tolerance and maxSteps can be the above defined simulation.minimisationTolerance and simulation.minimisationMaxSteps
+--  the tolerance and maxSteps can be the above defined minimisation.Tolerance and minimisation.MaxSteps
 --
 -- get_minimised_crdvels(tolerance,maxSteps) : this function returns a 2-tuple (crds,vels) containing
 --  a copy of coordinates and velocities after minimisation.
@@ -192,6 +192,9 @@ simulation =
 --  note that C++/OpenMM coordinates are not modified if modifying this table : this is a safe read-only copy
 --  the tolerance and maxSteps can be the above defined simulation.minimisationTolerance and simulation.minimisationMaxSteps
 --  NOTE lua indexing, starting from 1
+--
+-- get_minimised_energy_crdvels(tolerance,maxSteps) : this returns a 5-tuple (ep,ek,et,crds,vels) 
+--  This does the same as the two previous functions but with only one call
 --
 -- hr_timer() : returns a variable representing a c++ high precision timer : can be used for measuring execution time.
 --  do not try to modify it or even read it, it should only be used as argument for the following hr_timediff_* functions.

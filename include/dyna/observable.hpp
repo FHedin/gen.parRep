@@ -4,7 +4,7 @@
  * \author Florent Hédin
  * \author Tony Lelièvre
  * \author École des Ponts - ParisTech
- * \date 2016-2018
+ * \date 2016-2019
  */
 
 #ifndef OBSERVABLE_HPP_INCLUDED

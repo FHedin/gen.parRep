@@ -4,7 +4,7 @@
  * \author Florent Hédin
  * \author Tony Lelièvre
  * \author École des Ponts - ParisTech
- * \date 2016-2018
+ * \date 2016-2019
  */
 
 #ifndef GELMANRUBIN_HPP_INCLUDED
@@ -34,13 +34,11 @@ public:
 
   /**
   * @brief Constructor for a Gelman Rubin Analysis object; requires at least the number of chains (replica) as first argument.
-  *        The second argument allows to discard the first n observations when averaging, default is zero and thus disables 
-  *        discarding.  
   * 
   * @param _num_chains The number of G-R chains (same as the number of replicas usually).
-  * @param _discard Discards the first n observations, as usually there won't be convergence at the beginning.
+  * @param _no_convergence_if_less_than Optional argument : if set there won't be convergence check until at least _no_convergence_if_less_than observations have been accumulated for each observable : this may hel avoiding pseudo-convergence.
   */
-  GelmanRubinAnalysis(const uint32_t _num_chains, const uint32_t _discard=0);
+  GelmanRubinAnalysis(const uint32_t _num_chains, const uint32_t _no_convergence_if_less_than=0);
   
   
   /**
@@ -195,8 +193,9 @@ private:
   std::map<std::string,double> tolerance;             ///< Allows one tolerance treshold per observable type
   std::map<std::string,std::vector<double>> ratio;    ///< Allows one ratio vector per observable type
   
-  uint32_t num_chains;                      ///< The total number of chains
-  uint32_t discard_first;                   ///< A given number of records to ignore at the beginning
+  uint32_t num_chains = 0;                          ///< The total number of chains
+  uint32_t min_num_observations_before_check = 0;   ///< There won't be convergence check until at least this amount ob observations have been accumulated for each obseravble
+  
 };
 
 

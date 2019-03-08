@@ -4,7 +4,7 @@
  * \author Florent Hédin
  * \author Tony Lelièvre
  * \author École des Ponts - ParisTech
- * \date 2016-2018
+ * \date 2016-2019
  */
 
 #include <iostream>
@@ -13,7 +13,6 @@
 #include <exception>
 
 #include "sol.hpp"
-#include "rand.hpp"
 #include "logger.hpp"
 #include "lua_interface.hpp"
 #include "omm_interface.hpp"
@@ -34,6 +33,7 @@ typedef tuple<double,double,double> VelsTuple;
 typedef tuple<double,double,double> COMTuple;
 typedef tuple<double,double,double> ENETuple;
 typedef tuple<sol::table,sol::table> SolTabl2Tuple;
+typedef tuple<double,double,double,sol::table,sol::table> ENETupleSolTablTuple;
 
 luaInterface::luaInterface(const string _inputFile,
                            DATA& _dat,
@@ -165,12 +165,12 @@ void luaInterface::parse_lua_file()
 
   if(pvMap["algorithm"] == "PARREP")
   {
-    fprintf(stdout,"Parsing ParRep simulation parameters.");
+    fprintf(stdout,"Parsing ParRep simulation parameters.\n");
     parse_parrep_params();
   }
   else if(pvMap["algorithm"] == "PARREP_FV")
   {
-    fprintf(stdout,"Parsing ParRep FV simulation parameters.");
+    fprintf(stdout,"Parsing ParRep FV simulation parameters.\n");
     parse_parrepFV_params();
     
     uint32_t num_ex_events = (uint32_t) stoul(pvMap.at("allowedExitEvents"));
@@ -473,20 +473,6 @@ void luaInterface::register_default_lua_functions()
                      return ENETuple(minE.epot(),minE.ekin(),minE.etot());
                    }
   );
-  
-  // returns energy contribution 
-  lua.set_function("get_group_epot",[&](int32_t groups) -> double
-                                    {
-                                      if(md->engine_supports_groups_splitting()==false)
-                                      {
-                                        runtime_error ex("Lua script called get_group_energy(...) but it seems that the currently active MD engine does not support the group splitting feature ! Aborting program, please fix your input file accordingly...");
-                                        throw ex;
-                                      }
-                                      ENERGIES e;
-                                      md->getSimData(nullptr,&e,nullptr,nullptr,groups);
-                                      return e.epot();
-                                    }
-  );
 
   // perform energy minimisation, and return the coordinates and velocities
   lua.set_function("get_minimised_crdvels",
@@ -521,13 +507,63 @@ void luaInterface::register_default_lua_functions()
 
                      return SolTabl2Tuple(crds,vels);
                    }
-);
+  );
+  
+  lua.set_function("get_minimised_energy_crdvels",
+                   [&](double tolerance, uint32_t maxSteps) -> ENETupleSolTablTuple
+                   {
+                     ENERGIES minE;
+                     vector<XYZ> coordinates;
+                     vector<XYZ> velocities;
+                     
+                     md->minimiseWithCopy(tolerance,maxSteps,minE,coordinates,velocities);
+                     
+                     sol::table crds = lua.create_table();
+                     crds["x"] = lua.create_table();
+                     crds["y"] = lua.create_table();
+                     crds["z"] = lua.create_table();
+                     
+                     sol::table vels = lua.create_table();
+                     vels["x"] = lua.create_table();
+                     vels["y"] = lua.create_table();
+                     vels["z"] = lua.create_table();
+                     
+                     for(uint32_t i=1; i<=dat.natom; i++)
+                     {
+                       crds["x"][i] = coordinates[i-1][0];
+                       crds["y"][i] = coordinates[i-1][1];
+                       crds["z"][i] = coordinates[i-1][2];
+                       
+                       vels["x"][i] = velocities[i-1][0];
+                       vels["y"][i] = velocities[i-1][1];
+                       vels["z"][i] = velocities[i-1][2];
+                     }
+                     
+                     return ENETupleSolTablTuple(minE.epot(),minE.ekin(),minE.etot(),crds,vels);
+                   }
+  );
+  
   
   // get the current temperature (from kinetic energy)
   lua.set_function("get_temperature",
                    [&]()->double{ return md->getTemperature();}
   );
 
+  // returns energy contribution 
+  lua.set_function("get_group_epot",
+                   [&](int32_t groups) -> double
+                   {
+                     if(md->engine_supports_groups_splitting()==false)
+                     {
+                       runtime_error ex("Lua script called get_group_energy(...) but it seems that the currently active MD engine does not support the group splitting feature ! Aborting program, please fix your input file accordingly...");
+                       throw ex;
+                     }
+                     ENERGIES e;
+                     md->getSimData(nullptr,&e,nullptr,nullptr,groups);
+                     return e.epot();
+                   }
+  );
+  
 }
 
 void luaInterface::register_default_lua_variables()
@@ -541,7 +577,7 @@ void luaInterface::register_default_lua_variables()
   lua["temperature"] = 0.0;
   
   lua.create_named_table("minimisation");
-  lua["minimisation"]["Tolerance"] = 1e-6;
+  lua["minimisation"]["Tolerance"] = 10.0;
   lua["minimisation"]["MaxSteps"]  = 0;
   
   lua["equilibrationSteps"] = 50e3;
@@ -559,13 +595,13 @@ void luaInterface::register_default_lua_variables()
   
   // expose dummy lambda functions ; they do nothing
   //  and are the default in case the user does not override them in the lua script
-  lua["SQLiteDB"]["open"].set_function([](){fprintf(stderr,"Dummy lambda db_open\n");});
+  lua["SQLiteDB"]["open"].set_function([](){fprintf(stdout,"Dummy lambda db_open\n");});
   
-  lua["SQLiteDB"]["close"].set_function([](){fprintf(stderr,"Dummy lambda db_close\n");});
+  lua["SQLiteDB"]["close"].set_function([](){fprintf(stdout,"Dummy lambda db_close\n");});
   
-  lua["SQLiteDB"]["insert_state"].set_function([](){fprintf(stderr,"Dummy lambda db_insert\n");});
+  lua["SQLiteDB"]["insert_state"].set_function([](){fprintf(stdout,"Dummy lambda db_insert\n");});
   
-  lua["SQLiteDB"]["backup_to_file"].set_function([](){fprintf(stderr,"Dummy lambda db_backup\n");});
+  lua["SQLiteDB"]["backup_to_file"].set_function([](){fprintf(stdout,"Dummy lambda db_backup\n");});
   
 }
 
@@ -588,7 +624,7 @@ void luaInterface::parse_omm_params()
     p = OMM_interface::omm_platforms_names.at(PLATFORMS::CUDA);
   else
   {
-    throw runtime_error(string("Error when parsing OMM platform : '" + p + "' is not a valid platform type !"));
+    throw runtime_error(string("Error when parsing OMM platform : '" + p + "' is not a valid platform type !\n"));
   }
   
   fprintf(stdout,"Parsed OMM platform (or default if missing) : %s\n",pvMap["platform"].c_str());
@@ -650,7 +686,7 @@ void luaInterface::parse_omm_params()
   }
   else
   {
-    fprintf(stdout,"No specific OpenMM platform properties defined by the user...");
+    fprintf(stdout,"No specific OpenMM platform properties defined by the user...\n");
   }
 }
 
@@ -699,7 +735,7 @@ void luaInterface::parse_parrepFV_params()
   }
   else
   {
-    throw runtime_error( "Error when trying to read simulation.GRobservables which is required for a 'parrepFV' simulation !\n");
+    throw runtime_error( "Error when trying to read 'simulation.GRobservables' which is required for a 'parrepFV' simulation !\n");
   }
   
   pvMap["GRtol"] = to_string(simulation_def["GRtol"].get_or(0.01));

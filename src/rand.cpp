@@ -4,7 +4,7 @@
  * \author Florent Hédin
  * \author Tony Lelièvre
  * \author École des Ponts - ParisTech
- * \date 2016-2018
+ * \date 2016-2019
  */
 
 #include <random>
@@ -12,12 +12,14 @@
 #include <limits>
 #include <iostream>
 #include <sstream>
+#include <stdexcept>
 
 #include <cstdio>
 
-#include "logger.hpp"
-#include "rand.hpp"
 #include "global.hpp"
+#include "logger.hpp"
+#include "mpi_utils.hpp"
+#include "rand.hpp"
 
 using namespace std;
 
@@ -40,17 +42,132 @@ static uniform_int_distribution<int32_t>  int32_t_dist(numeric_limits<int32_t>::
 static uniform_int_distribution<uint32_t> uint32_t_dist(numeric_limits<uint32_t>::min(),
                                                         numeric_limits<uint32_t>::max());
 
-void init_rand()
+void init_rand(SEEDS_IO io_type, const string& seeds_file_name)
 {
-  random_device rd;
-  LOG_PRINT(LOG_INFO,"Entropy of 'std::random_device' on this machine is : %lf\n",rd.entropy());
+  
+  bool save_seeds = false;
+  bool load_seeds = false;
+  
+  switch(io_type)
+  {
+    case SEEDS_IO::NONE :
+      break;
+      
+    case SEEDS_IO::SAVE_TO_FILE :
+      save_seeds = true;
+      break;
+      
+    case SEEDS_IO::LOAD_FROM_FILE :
+      load_seeds = true;
+      break;
+      
+    default:
+      throw runtime_error("Error : unsupported SEEDS_IO mode in function '" + string(__func__) + "' !!!");
+      break;
+  }
+
+  /*
+   * Each MPI ranks requires 512 uint32_t 'seeds' for initialising its mt19937_64 generator
+   */
+  array<uint32_t,512> seeds;
+  
+  if(!load_seeds)
+  {
+    random_device rd;
+    LOG_PRINT(LOG_INFO,"Entropy of 'std::random_device' on this machine is : %lf\n",rd.entropy());
+    
+    for(size_t n=0; n<512; n++)
+      seeds[n] = (uint32_t) rd();
+  }
+  else
+  {
+    // First enforce sync with a barrier
+    MPI_Barrier(MPI_COMM_WORLD);
+    
+    int32_t myrank = -1, numranks = -1;
+    MPI_Comm_rank(MPI_COMM_WORLD, &myrank);
+    MPI_Comm_size(MPI_COMM_WORLD, &numranks);
+    
+    // see comments in the following block "if(save_seeds)..." below
+    
+    MPI_File myfile;
+    
+    MPI_File_open(MPI_COMM_WORLD, seeds_file_name.c_str(),
+                  MPI_MODE_RDONLY, MPI_INFO_NULL,
+                  &myfile);
+    
+    MPI_Offset disp = myrank*512*sizeof(uint32_t);
+    
+    MPI_File_set_view(myfile, disp,
+                      MPI_UINT32_T, MPI_UINT32_T, 
+                      "native", MPI_INFO_NULL);
+    
+    MPI_File_read(myfile, seeds.data(),
+                  512, MPI_UINT32_T,
+                  MPI_STATUS_IGNORE);
+    
+    MPI_File_close(&myfile);
+    
+    MPI_Barrier(MPI_COMM_WORLD);
+  }
   
   /*
-   * Each MPI ranks reads 512 uint64_t 'seeds' from random_device
+   * Save seeds to a unique binary file for reproducibility
    */
-  array<uint64_t,512> seeds;
-  for(size_t n=0; n<512; n++)
-    seeds[n] = (uint64_t) rd();
+  if(save_seeds)
+  {
+    // First enforce sync with a barrier
+    MPI_Barrier(MPI_COMM_WORLD);
+    
+    int32_t myrank = -1, numranks = -1;
+    MPI_Comm_rank(MPI_COMM_WORLD, &myrank);
+    MPI_Comm_size(MPI_COMM_WORLD, &numranks);
+    
+    /* Shared file */
+    MPI_File myfile;
+    
+    /*
+     * Open the file : it will be a binary file open in write mode, with overwritting
+     * 
+     * int MPI_File_open(MPI_Comm comm, const char *filename,
+     *                   int amode, MPI_Info info,
+     *                   MPI_File *fh)
+     */
+    MPI_File_open(MPI_COMM_WORLD, seeds_file_name.c_str(),
+                  MPI_MODE_CREATE | MPI_MODE_WRONLY, MPI_INFO_NULL,
+                  &myfile);
+    
+    // displacment == absolute displacement in the file where the data will be written (from beginning of file)
+    MPI_Offset disp = myrank*512*sizeof(uint32_t);
+    
+    /*
+     * Set the file view : tels at which value of disp data will be written
+     * 
+     * MPI_File_set_view(MPI_File fh, MPI_Offset disp,
+     *                   MPI_Datatype etype, MPI_Datatype filetype,
+     *                   const char *datarep, MPI_Info info)
+     */
+    MPI_File_set_view(myfile, disp,
+                      MPI_UINT32_T, MPI_UINT32_T, 
+                      "native", MPI_INFO_NULL);
+    /*
+     * Write buf to the file : 
+     * 
+     int MPI_File_write(MPI_File fh, const void *buf,
+                        int count, MPI_Datatype datatype,
+                        MPI_Status *status)
+     */
+    MPI_File_write(myfile, seeds.data(),
+                   512, MPI_UINT32_T,
+                   MPI_STATUS_IGNORE);
+    
+    /*
+     * Close the file
+     */
+    MPI_File_close(&myfile);
+    
+    MPI_Barrier(MPI_COMM_WORLD);
+  }
 
   // then each ranks initialises its own mt19937 with the seed sequence
   seed_seq seq(seeds.begin(),seeds.end());
@@ -59,35 +176,7 @@ void init_rand()
   // finally for each generator we discard some random numbers to be sure to avoid any correlation
   generator.discard(4*generator.state_size);
   
-}
-
-void init_rand(const string& seeds_str)
-{
-  istringstream split_stream(seeds_str);
-  string token;
-  
-  vector<uint64_t> seeds;
-  
-  /*
-   * Exctract the seeds from the comma separated string ;
-   * NOTE It is crucial to use a different string on each MPI rank otherwise the generators will provide the same numbers on each rank !!
-   */
-  while(getline(split_stream, token, ','))
-  {
-    seeds.push_back((uint64_t)stoul(token));
-  }
-  
-  if(seeds.size()<5)
-  {
-    throw runtime_error("Error : when providing a string encoded list of seeds for the random generator, you need to provide at least 5 seeds, but it appears that you have provided only " + to_string(seeds.size()) + " seeds ! \n");
-  }
-  
-  seed_seq seq(seeds.begin(),seeds.end());
-  generator.seed(seq);
-  
-  // finally for each generator we discard some random numbers to be sure to avoid any correlation
-  generator.discard(4*generator.state_size);
-  
+  MPI_Barrier(MPI_COMM_WORLD);
 }
 
 double get_double_unif_0_1()

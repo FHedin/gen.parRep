@@ -21,7 +21,7 @@ then
   fi
   tar xf LuaJIT-2.0.5.tar.gz
   cd LuaJIT-2.0.5
-  make PREFIX=$PWD/build -j 8 install
+  make PREFIX=$PWD/build install
   cd ..
 fi
 export LUAJIT_INSTALL_DIR=$PWD/LuaJIT-2.0.5/build

@@ -4,7 +4,7 @@
  * \author Florent Hédin
  * \author Tony Lelièvre
  * \author École des Ponts - ParisTech
- * \date 2016-2018
+ * \date 2016-2019
  */
 
 #include <utility>
@@ -23,7 +23,6 @@
 
 using namespace std;
 
-// NOTE to be used by a derived class only
 ParRepFV::ParRepFV(DATA& _dat,
                    unique_ptr<ATOM[]>& _at,
                    unique_ptr<MD_interface>& _md,

@@ -1,29 +1,27 @@
--- All lines starting with '--' are comments and thus ignored
---
 -- Input Lua script providing simulation parameters and functions for the parRep software
--- TEST system --> FKBP protein with DMSO ligand (PDB : 1d7h), with implicit solvent model, using Amber14+GAFF+OBC2
--- GOAL --> estimating k_off (vound to unbound) and k_on (unbound to bound) using parRep
+-- All lines starting with '--' are comments and thus ignored
+
+-- Cluster of 7 Argon atoms at low temperature (15 K)
+-- see omm_LJ7.py 
 
 print("Lua version : ",_VERSION)
-
--- show global variables
---  all tables/functions/variables marked as having a default value below should be listed there
--- for key,value in pairs(_G) do
---   print("found Lua global -> " .. key)
--- end
 
 --------------------------------------------------------------------------------------------------------------
 -- --------------- SIMULATION PARAMETERS ------------------------------
 --------------------------------------------------------------------------------------------------------------
 
+-- NOTE on reproducibility : Only the REF platform was tested, and only with the 3 xml files from the ci directory ;
+--      there is not guarantee that reproducibility might be achieved otherwise, just try yourself ! If you want to share a success or failure,
+--      please open an issue on https://gitlab.inria.fr/parallel-replica/gen.parRep/issues ; thanks !
+
 -- This is used for defining a maximum allowed running time for the simulation
 -- The starting time off the program is saved at initialisation
 -- in max_run_time_hours the user stores for example the maximum running time allowed by the queueing system when running on a cluster
 --  fractional representation is allowed, e.g. 1.25 would be 1 hour and 15 minutes
-max_run_time_hours = 6.0 -- default if not set in this script will be 24 hours
+max_run_time_hours = 0.5 -- default if not set in this script will be 24 hours
 -- in minutes_to_stop_before_max_run_time the user requires the program to stop a few minutes before max_run_time_hours,
 --  useful for large systems if the I/O may take some time; should be at least 1 minute, and no fractional value allowed
-minutes_to_stop_before_max_run_time = 2 -- default if not set in this script will be 5 minutes
+minutes_to_stop_before_max_run_time = 1 -- default if not set in this script will be 5 minutes
 
 -- This uses OpenMM as MD engine
 MD_Engine = "OpenMM"
@@ -35,8 +33,8 @@ MD_Engine = "OpenMM"
 --  OCL  : on cpu or gpu of any brand, or any accelerating device available
 --  CUDA : on nvidia gpu only, usually the fastest
 -- OMMplatform = "AUTO"
--- OMMplatform = "REF"
-OMMplatform = "CPU"
+OMMplatform = "REF"
+-- OMMplatform = "CPU"
 -- OMMplatform = "OCL"
 -- OMMplatform = "CUDA"
 
@@ -49,8 +47,8 @@ OMMplatform = "CPU"
 -- REF platform has no extra properties
 -- ...
 
--- CPU platform properties : Threads = "1" is equivalent to defining OPENMM_CPU_THREADS=1 in the environnment
-OMMplatform_properties = { Threads = "1"}
+-- CPU platform properties : Threads = "1" is equivalent to exporting OPENMM_CPU_THREADS=1 in the environnment
+-- OMMplatform_properties = { Threads = "1"}
 
 -- OpenCL platform properties
 -- OMMplatform_properties = { 
@@ -72,35 +70,35 @@ OMMplatform_properties = { Threads = "1"}
 -- load the integrator parameters from a serialised OpenMM XML file ;
 -- no default, error if undefined
 --  adapt the path to the file in the following line
-integrator = { xml = "./mol/1d7h_i/Integrator.xml" }
+integrator = { xml = "./lj7/Integrator.xml" }
 
 -- load the OpenMM System from a serialised XML file
 -- no default, error if undefined
-system = { xml = "./mol/1d7h_i/System.xml" }
+system = { xml = "./lj7/System.xml" }
 
 -- load the OpenMM State from a serialised XML file
 -- no default, error if undefined
-state = { xml = "./mol/1d7h_i/State.xml" }
+state = { xml = "./lj7/State.xml" }
 
 -- parameters for energy minimisation : tolerance and maximum number of steps (if 0 : no limit, continue until tolerance satsfied)
--- defaults are : minimisation={Tolerance=1e-6,MaxSteps=0}
--- minimisation =
--- {
---   Tolerance = 0.01,
---   MaxSteps = 100
--- }
+-- defaults are : minimisation={Tolerance=10.0, MaxSteps=0}
+minimisation =
+{
+  Tolerance = 0.00001,
+  MaxSteps  = 0
+}
 
 -- before the parRep algorithm actually starts, perform some steps of equilibration (MPI rank 0 performs dynamics alone)
 -- default : 50e3
--- can be small or 0 if system provided in XML files was already equilibrated
 equilibrationSteps = 0
 
--- the total number of steps of the simulation ;
--- together with the timestep read from the integrator file, it gives an idea of the total simulation time before stopping
+-- the total number of steps of the simulation ; together with the timestep read from the integrator file
+--  it gives to total simulation time
 -- no default, error if undefined
-numSteps = 50e6
+numSteps = 1
 
 -- Define the type of ParRep simulation to perform, and provide its parameters
+--  only one of the two following tables should be defined
 
 -- FV ParRep (Lelièvre et al. algorithm): only "algorithm" and "GRobservables" are mandatory,
 --  the others have default (c.f. documentation)
@@ -113,19 +111,19 @@ simulation =
   --  without any a priori defined decorrelation or dephasing time stage.
   --  Convergence is checked with Gelman-Rubin statistics
   -- a frequency (in steps) at which to verify if the system left the current state during FV procedure
-  checkFV = 2000, -- 2 ps
+  checkFV = 500, -- 0.5 ps
   -- a frequency (in steps) at which to evaluate convergence using the Gelman-Rubin statistics
-  checkGR = 100,  -- 100 fs
+  checkGR = 5, -- 5 fs
   -- check FV convergence if at least minAccumulatedObs have already been accumulated 
   --  This may be useful if there is a risk of early pseudo-convergence for some of the observables when only a few samples have been accumulated
-  --  Therefore the minimum FV convergence time will be minAccumulatedObs*checkGR*dt (here 100*100*dt = 20000 fs = 20 ps, but it is likely that the convergence time will be larger than that)
+  --  Therefore the minimum FV convergence time will be minAccumulatedObs*checkGR*dt (here 5000*5*dt = 25000 fs = 25 ps, but it is likely that the convergence time will be larger than that)
   --  Default is 100
-  minAccumulatedObs = 100,
+  minAccumulatedObs = 5000,
   -- parameter for parallel dynamics stage
   --  checkDynamics is the frequency (in steps) at which to verify if the system left the current state
-  checkDynamics = 2000, -- 2 ps
-  -- Gelman-Rubin statistics checks convergence of one or several Observables: we define their name here, then there should be one function matching this name below in this file
-  GRobservables = {"getCOMsDist","rmsVelDMSO","get_dist_1","get_dist_2"},
+  checkDynamics = 500, --  0.5 ps
+  -- Gelman-Rubin statistics checks convergence of several Observables: we define their name here, then there should be one function matching this name below in this file
+  GRobservables = {"getEpot","getEkin"},
   -- Gelman-Rubin convergence : 0.01 means 1 %
   GRtol = 0.01
 }
@@ -230,44 +228,9 @@ simulation =
 --------------------------------------------------------------------------------------------------------------
 
 -- Some of the following VARIABLES and FUNCTIONS are mandatory and called from C++ (if it is the case it is explicitly documented)
--- If not they can be restricted to this file using the local keyword
+-- If not they can be restrited to this file using the local keyword
 
 -- Define here local variables and functions used later within state_init() and check_state_left()
-
--- from Caflisch 2011 article
--- the following are DMSO not-H atoms
-local dmso = {1663,1664,1665,1666}
-
--- From Caflisch 2016 article
--- the first distance we track to know if there is an unbinding is the distance between the amide hydrogen of residue 56 (c++ idx 869) and the oxygen of DMSO (c++ idx 1664)
-local index_dist_1 = {869,1664}
--- the second distance is between the COM of the ring of residue 59 (c++ idxs 930,931,933,935,937,939) and the sulfur of the DMSO (c++ idx 1663)
-local index_dist_2 = {930,931,933,935,937,939,1663}
-
--- there are 2 possible states for DMSO : bound ('b') or unbound ('u')
---  intial state will be determined in state_init()
-local currState = nil
-
--- definition of binding <-> unbinding thresholds, following article from
---  A. Caflisch, JCTC 2016
--- a bound state becomes unbound if the distance is GREATER THAN (angstroems):
-local b_to_u_d1 = 12.0 
-local b_to_u_d2 = 12.0 
-
--- for the moment we only want to estimate b -> u transitions so after observing a state u
---  we will go back to b : for this we need a backup of coordinates, velocities and PBCs on Lua's side
-local b_backup = { crds={}, vels={}, pbc={} }
-
--- useful for selecting a slice of an array
-function table.slice(tbl, first, last, step)
-  local sliced = {}
-
-  for i = first or 1, last or #tbl, step or 1 do
-    sliced[#sliced+1] = tbl[i]
-  end
-
-  return sliced
-end
 
 --------------------------------------------------------------------------------------------------------------
 -- --------------- FUNCTIONS DEFINING A PARREP STATE ------------------------------
@@ -277,6 +240,66 @@ end
 --  dynamics left the current state. You are free to define the state in any way, using variables defined explicitly in this file
 --  or implicitly (c++ interface, see above).
 
+-- Define here local variables and functions used later within state_init() and check_state_left()
+
+local fromState = 'unknown'
+
+local LJ7_epsilon = 0.99607255958 -- kJ/mol
+
+-- after minimisation, potential energy divided by the epsilon should be one of the following (because the following are multiples of epsilon)
+local LJ7_ref_energies = {first  = -16.505000000000000,
+                          second = -15.935000000000000,
+                          third  = -15.593000000000000,
+                          fourth = -15.533000000000000
+                         }
+
+-- local dumpFile = "traj."..tostring(mpi_rank_id)..".xyz"
+
+-- local function dump_XYZ(crds) 
+--    local fi = io.open(dumpFile,"a")
+--    
+--    fi:write(tostring(natoms).."\n")
+--    fi:write("# dump after error\n")
+--    for i=1,natoms
+--    do
+--      local str = string.format("AR\t%.3f\t%.3f\t%.3f\n",10.0*crds.x[i],10.0*crds.y[i],10.0*crds.z[i])
+--      fi:write(str)
+--    end
+--    
+--    fi:close()
+--    
+-- end
+
+-- Will identify the current state by performing a minimsation and checking the potential energy to the known values from LJ7_ref_energies
+local function LJ7_stateID()
+
+  -- get potential energy, coordinates are untouched (internal copy was made before calling minimisation)
+  local ep,ek,et = get_minimised_energy(minimisation.Tolerance,minimisation.maxSteps)
+--   local ep,ek,et,crds,vels = get_minimised_energy_crdvels(minimisation.Tolerance,minimisation.maxSteps)
+  
+  -- scale energy in units of epsilon
+  ep = ep/LJ7_epsilon
+  
+--   print("Potential energy is : ",ep)
+  
+--   dump_XYZ(crds,vels)
+  
+  if( math.abs(math.abs(ep)-math.abs(LJ7_ref_energies.first)) < 1e-3 ) then
+    return "first"
+  elseif( math.abs(math.abs(ep)-math.abs(LJ7_ref_energies.second)) < 1e-3 ) then
+    return "second"
+  elseif( math.abs(math.abs(ep)-math.abs(LJ7_ref_energies.third)) < 1e-3 ) then
+    return "third"
+  elseif( math.abs(math.abs(ep)-math.abs(LJ7_ref_energies.fourth)) < 1e-3 ) then
+    return "fourth"
+  else
+    print("Warning : unable to identify the minimum which has after minimisation an epot of ",ep," units of epsilon !!!")
+--     return "unknown"
+--     dump_XYZ(crds)
+    exit_from_lua()
+  end
+  
+end
 
 -- this function is mandatory and called from C++, program will fail if not defined
 --  it should take no arguments
@@ -286,140 +309,102 @@ end
 -- It can also be called at any time from this file if required
 function state_init()
 
-  -- access coordinates of the 2 atoms defining group index_dist_1
-  local d1_h_x,d1_h_y,d1_h_z = get_coordinates(index_dist_1[1]+1)
-  local d1_o_x,d1_o_y,d1_o_z = get_coordinates(index_dist_1[2]+1)
-
-  -- access the com of the 6-ring and the S atom defining group index_dist_2
-  local d2_ring_x,d2_ring_y,d2_ring_z = get_COM_idxs(table.slice(index_dist_2,1,6))
-  local d2_s_x,d2_s_y,d2_s_z = get_coordinates(index_dist_2[7]+1)
-
-  local d1 = 10.0*math.sqrt( (d1_h_x-d1_o_x)^2    + (d1_h_y-d1_o_y)^2    + (d1_h_z-d1_o_z)^2 )
-  local d2 = 10.0*math.sqrt( (d2_ring_x-d2_s_x)^2 + (d2_ring_y-d2_s_y)^2 + (d2_ring_z-d2_s_z)^2 )
+  print("Calling LJ7_stateID() on rank ",mpi_rank_id)
+  fromState = LJ7_stateID()
+  print("Initial state is: ",fromState)
   
-  print('Initial distances d1,d2 are : ',d1,' and ',d2)
-  
-  -- we require BOTH d1 and d2 to be strictly larger than b_to_u for having an unbound state
-  if(d1>b_to_u_d1 and d2>b_to_u_d2) then
-    currState = 'u'
-    print('Initial DMSO state appears to be : UNBOUND')
-  else
-    currState = 'b'
-    print('Initial DMSO state appears to be : BOUND')
-  end
-  
-  -- backup
-  if currState=='b' then
-    print('Performing a Lua backup of bound pbc, coordinates and velocities')
-    b_backup.pbc = get_pbc()
-    b_backup.crds,b_backup.vels = get_all_crdvels()
-  else
-    print('Found an unbound state ; switching back to a bound one for next parrep iteration')
-    set_pbc(b_backup.pbc)
-    set_all_crdvels(b_backup.crds,b_backup.vels)
-    currState = 'b'
-  end
-
 end
-
--- You may create as many functions as you want and call them from check_state_left(),
---  but the c++ code will in the end only call check_state_left()
 
 -- this function is mandatory and called from C++, program will fail if not defined
 --  it should take no arguments
 --  it should return a boolean : true in case the dynamics left the state, false otherwise
+-- You may create as many functions as you want and call them from check_state_left(),
+--  but the c++ code will in the end only call check_state_left()
 function check_state_left()
 
-  -- access coordinates of the 2 atoms defining group index_dist_1
-  local d1_h_x,d1_h_y,d1_h_z = get_coordinates(index_dist_1[1]+1)
-  local d1_o_x,d1_o_y,d1_o_z = get_coordinates(index_dist_1[2]+1)
+--   -- value of the phi and psi dihedral angles of ala2 at a given time value
+--   local phi = calcDihe(phi_def,nil)
+--   local psi = calcDihe(psi_def,nil)
+-- 
+  local escaped = false
 
-  -- access the com of the 6-ring and the S atom defining group index_dist_2
-  local d2_ring_x,d2_ring_y,d2_ring_z = get_COM_idxs(table.slice(index_dist_2,1,6))
-  local d2_s_x,d2_s_y,d2_s_z = get_coordinates(index_dist_2[7]+1)
-
-  local d1 = 10.0*math.sqrt( (d1_h_x-d1_o_x)^2    + (d1_h_y-d1_o_y)^2    + (d1_h_z-d1_o_z)^2 )
-  local d2 = 10.0*math.sqrt( (d2_ring_x-d2_s_x)^2 + (d2_ring_y-d2_s_y)^2 + (d2_ring_z-d2_s_z)^2 )
+  local toState = LJ7_stateID()
   
-  local newState = currState
-
-  -- we require BOTH d1 and d2 to be strictly larger than b_to_u for having an unbound state
-  if(d1>b_to_u_d1 and d2>b_to_u_d2) then
-    currState = 'u'
+  if(fromState == toState) then
+    escaped = false
   else
-    currState = 'b'
+    escaped = true
+    print("Transition from state ",fromState," to state ",toState," detected on MPI rank ",mpi_rank_id," !!! ")
   end
   
-  print('Distances d1,d2 are : ',d1,' and ',d2)
-
-  print('DMSO state appears to be :',currState)
-  
-  if (newState == currState) then
-    return false
-  else
-    return true
-  end
-
+  return escaped
 end
 
 -- this function is mandatory and called from C++, program will fail if not defined
 --  it should take no arguments
 --  it should return a boolean : true in case the system is currently outside of any of the known states, false otherwise
--- If the configuration space is a partition the system enters a new state as soon as it exits another, and therefore this function can just return false
---  without doing anything
+-- If the configuration space is a partition the system enters a new state as soon as it exits another, and therefore this function can just return false without doing anything
 function check_transient_propagation_required()
-  -- we have partitioned the configuration space in two states so this returns false
-  return false
+ -- state space is partitioned for the LJ7
+ return false
 end
 
 --------------------------------------------------------------------------------------------------------------
 -- --------------- DATABASE OF STATES STORAGE FUNCTIONS ------------------------------
 --------------------------------------------------------------------------------------------------------------
 
--- functions and variables use for storing data to a database are defined as members of the table SQLiteDB
---  the following can be defined as they are used from the c++ code : 
---    SQLiteDB.insert_statement_states
---    SQLiteDB.insert_statement_crdvels
+-- parameters for the database used for storing information about parRep states
+-- The database can be stored in memory for performance, with a backup regularly performed to file 'name' : in that case define backupFrequency,
+--  together with an appropriate backup function below
+-- If writes to the database are directly performed to disk this is less important, and a large value can be assigned to backupFrequency,
+--  and the backup function below can be empty or either undefined (there is a default one doing nothing defined on c++ side)
+-- defaults are : database={name="run.db",backupFrequency=500.0}
+database = 
+{
+  name = "lj7.db",
+  -- frequency, in ps, at which to backup the database to a file
+  backupFrequency = 1e99 -- this disables intermediate backup of the db : if the db was indeed not opened in memory but instead on disk it is useless to perform backups
+}
+
+-- functions for storing data to a database are defined as members of the table SQLiteDB (which already exists, do not recreate it)
+--  the following functions can be defined as they are used from the c++ code : 
+--
 --    function SQLiteDB.open()
 --    function SQLiteDB.close()
 --    function SQLiteDB.insert_state()
 --    function SQLiteDB.backup_to_file()
 --
 -- if not defined within this file there are default empty functions defined, doing nothing
+--
+-- You are free to define more functions or variables as members of the table SQLiteDB
+--  but they will only be accessible from this file.
+--
+-- For example table creation statements can be stored in the table : 
+--    SQLiteDB.insert_statement_...
+--    ... more ...
+--
+-- The database object is itself stored in this table : SQLiteDB.db
 
 -- only rank 0 manages a database
 if(mpi_rank_id==0)
 then
 
-  -- parameters for the SQLite3 database used for storing information about parRep states
-  -- The database is stored in memory for performance, but a backup is regularly performed to file 'name'
-  -- defaults are : database={name="run.db",backupFrequency=500.0}
-  database = 
-  {
-    -- Because the structure of the algorithms, each MPI rank will have its own database and each will be saved to an altered
-    --  fileName where the MPI rank id is added; for instance with name='run.db'
-    --  files 'run.0.db', 'run.1.db', ... would be generated i.e. id is inserted before extension dot
-    name = "1d7h.db",
-    -- frequency, in ps, at which to backup the database to a file
-    backupFrequency = 100.0
-  }
-
-  SQLiteDB.insert_statement_states  = [[ INSERT INTO STATES (PARREP_DONE,REF_TIME,ESC_TIME,STATE_FROM,STATE_TO,TAU,EXIT_ORDER)
-                                                    VALUES ($lprep,$reft,$esct,$state_from,$state_to,$tau,$exit_order); ]]
+  SQLiteDB.insert_statement_states  = [[ INSERT INTO STATES (PARREP_DONE,REF_TIME,ESC_TIME,STATE_FROM,TAU)
+                                                     VALUES ($lprep,$reft,$esct,$state_from,$tau); ]]
 
   SQLiteDB.insert_statement_crdvels = [[ INSERT INTO CRDVELS (ID,X,Y,Z,VX,VY,VZ)
-                                                    VALUES ($id,$x,$y,$z,$vx,$vy,$vz); ]]
+                                                      VALUES ($id,$x,$y,$z,$vx,$vy,$vz); ]]
 
   function SQLiteDB.open()
 
-    print('Lua SQLite3 opening an on disk db named ',database.name,' on rank ',mpi_rank_id,' of ',mpi_num_ranks)
+    print('Lua SQLite3 opening an on disk db named ',database.name,' on rank ',mpi_rank_id)
     
-    -- open in memory database and enable foreign keys
+    -- open database and enable foreign keys
     SQLiteDB.db = sqlite3.open(database.name)
     SQLiteDB.db:exec("PRAGMA foreign_keys = ON;")
-    
-    SQLiteDB.db:exec("BEGIN TRANSACTION;")
 
+    SQLiteDB.db:exec("BEGIN TRANSACTION;")
+    
     -- create the states table : it contains the escape time for this state
     SQLiteDB.db:exec[[ CREATE TABLE STATES(
                         ID          INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
@@ -427,9 +412,7 @@ then
                         REF_TIME    REAL,
                         ESC_TIME    REAL,
                         STATE_FROM  TEXT,
-                        STATE_TO    TEXT,
-                        TAU         REAL,
-                        EXIT_ORDER  INTEGER); ]]
+                        TAU         REAL); ]]
 
     -- create the crdvels table : it contains coordinates and velocities of the system for a given 'states' record
     SQLiteDB.db:exec[[ CREATE TABLE CRDVELS(
@@ -440,67 +423,29 @@ then
                         VX  REAL,
                         VY  REAL,
                         VZ  REAL,
-                        FOREIGN KEY(ID) REFERENCES STATES(ID)
-                                          ); ]]
+                        FOREIGN KEY(ID) REFERENCES STATES(ID) ); ]]
 
     SQLiteDB.db:exec("END TRANSACTION;")
 
   end
 
   function SQLiteDB.close()
-
-    print('Lua SQLite3 closing in-memory db on rank ',mpi_rank_id,' of ',mpi_num_ranks)
     SQLiteDB.db:close()
-
   end
 
   local stateID=0
 
   -- the first three arguments are always provided from c++ code
-  -- extra arguments might be provided by the ... and should be retrieved from Lua's side using the hidden metatable arg
-  function SQLiteDB.insert_state(parRepDone,tauTime,escapeTime,...)
+  -- extra arguments might be provided by the ... and should be retrieved from Lua's side using the ... special token, converted to a table (see args below)
+  function SQLiteDB.insert_state(parRepDone,tauTime,escapeTime)
     
-    local ref_time = referenceTime
-    local from,to  = nil,nil
-    
-    if currState == 'u' then
-      from = 'b'
-      to   = 'u'
-    else
-      from = 'u'
-      to   = 'b'
-    end
-    
-    -- default exit_order if not provided by c++ is 1
-    local order=1
-    
-    -- extra arguments stored in ... always go as a pair key,value the key always being a string 
-    local args = {...}
-    if #args>0 then
-      
-      for i=1,#args,2
-      do
-        
-        local key,value = args[i],args[i+1]
-        
-        if key=="exit_order" then
-          order=value
-  --       elseif key=="check_states" then
-  --         state_init()
-  --         -- ...
-        elseif key=="ignore_ref_time" then
-          -- in some cases the exit time might be inserted before the exact reference_time is known: in that case the variable is set to NaN
-          ref_time = 0/0 -- depending on lua's version it should produce nan or -nan
-        end
-        
-      end
-      
-    end
+    local ref_time=referenceTime
+    local from=fromState
     
     SQLiteDB.db:exec("BEGIN TRANSACTION;")
-    
+
     local stmt = SQLiteDB.db:prepare(SQLiteDB.insert_statement_states)
-    stmt:bind_names{lprep=parRepDone, reft=ref_time, esct=escapeTime, state_from=from, state_to=to, tau=tauTime, exit_order=order}
+    stmt:bind_names{lprep=parRepDone, reft=ref_time, esct=escapeTime, state_from=from, tau=tauTime}
     stmt:step()
     stmt:finalize()
     
@@ -520,12 +465,12 @@ then
     
     SQLiteDB.db:exec("END TRANSACTION;")
 
-  end -- SQLiteDB.insert_state
+  end
 
-end -- (mpi_rank_id==0)
+end -- if(mpi_rank_id==0) ...
 
 --------------------------------------------------------------------------------------------------------------
--- --------------- GELMAN RUBIN FUNCTIONS ESTIMATING OBSERVABLES ------------------------------
+-- --------------- GELMAN RUBIN OBSERVABLES MONITORING FUNCTIONS ---------------------------------------------
 --------------------------------------------------------------------------------------------------------------
 
 -- Define a function for calculating the value of each Observable
@@ -536,63 +481,14 @@ end -- (mpi_rank_id==0)
 -- Those GR functions are called from C++ if they were listed in simulation.GRobservables
 --
 
--- Returns instantaneous value of the distance between the COMs defined above, i.e. the criterion defining the state
-function getCOMsDist()
-
-  local d_cx,d_cy,d_cz = get_COM_idxs(dmso)
-  local cx,cy,cz = get_COM()
-
-  local dist = math.sqrt( (d_cx-cx)^2 + (d_cy-cy)^2 + (d_cz-cz)^2 )
-
-  return dist
-
+-- Definition of the "getEpot" and "getEkin" observables used for Gelman-Rubin statistics
+-- Just returns value of the potential and kinetic energy, scaled to units of epsilon
+function getEpot()
+  return epot
 end
 
--- returns the root mean square velocity of DMSO molecule
-function rmsVelDMSO()
-
-  local vel = {}
-
-  for k,v in ipairs(dmso)
-  do
-    -- get_velocities(n) expects n as Lua index but in DMSO they are c++ style (starting at 0), so we add 1
-    local vx,vy,vz = get_velocities(v+1)
-    vel[k] = vx*vx + vy*vy + vz*vz
-  end
-
-  -- then calculate and return the RMS velocity
-  local rms = 0
-  for i=1,#vel
-  do
-    rms = rms + vel[i]
-  end
-
-  return (1/#vel)*math.sqrt(rms)
-
-end
-
-function get_dist_1()
-
-  -- access coordinates of the 2 atoms defining group index_dist_1
-  local d1_h_x,d1_h_y,d1_h_z = get_coordinates(index_dist_1[1]+1)
-  local d1_o_x,d1_o_y,d1_o_z = get_coordinates(index_dist_1[2]+1)
-
-  local d1 = math.sqrt( (d1_h_x-d1_o_x)^2 + (d1_h_y-d1_o_y)^2 + (d1_h_z-d1_o_z)^2 )
-  
-  return d1
-  
-end
-
-function get_dist_2()
-
-  -- access the com of the 6-ring and the S atom defining group index_dist_2
-  local d2_ring_x,d2_ring_y,d2_ring_z = get_COM_idxs(table.slice(index_dist_2,1,6))
-  local d2_s_x,d2_s_y,d2_s_z = get_coordinates(index_dist_2[7]+1)
-
-  local d2 = math.sqrt( (d2_ring_x-d2_s_x)^2 + (d2_ring_y-d2_s_y)^2 + (d2_ring_z-d2_s_z)^2 )
-  
-  return d2
-  
+function getEkin()
+  return ekin
 end
 
 --------------------------------------------------------------------------------------------------------------

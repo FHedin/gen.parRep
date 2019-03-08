@@ -4,7 +4,7 @@
  * \author Florent Hédin
  * \author Tony Lelièvre
  * \author École des Ponts - ParisTech
- * \date 2016-2018
+ * \date 2016-2019
  */
 
 #include <cstdio>
@@ -109,13 +109,6 @@ OMM_interface::OMM_interface(DATA& _dat,
   // deserialize the integrator
   integrator = unique_ptr<OpenMM::Integrator>(&integr);
   
-  // deserialize an OpenMM state : coordinates velocities forces energy
-  addPlatform(platformDesired,platformProperties,state);
-  
-  state.getPeriodicBoxVectors(pbc[0],pbc[1],pbc[2]);
-  
-  memcpy(dat.pbc.data(),pbc.data(),sizeof(pbc));
-  
   // re-seed the integrator
   if(dynamic_cast<OpenMM::LangevinIntegrator*>(integrator.get()))
   {
@@ -138,14 +131,22 @@ OMM_interface::OMM_interface(DATA& _dat,
     throw runtime_error("Error when re-seeding the OMM integrator : integrator type is neither OpenMM::LangevinIntegrator or OpenMM::BrownianIntegrator !\n");
   }
   
+  // from system and integrator, create a platform and a context using the state
+  addPlatform(platformDesired,platformProperties,state);
+  
+  // retireve pbc data and store it in dat
+  state.getPeriodicBoxVectors(pbc[0],pbc[1],pbc[2]);
+  memcpy(dat.pbc.data(),pbc.data(),sizeof(pbc));
+  
   // fill dat structure with unserialised data
   dat.natom    = system->getNumParticles();
   dat.timestep = integrator->getStepSize();
 
+  // retrieve initial positions and velocities
   pos = vector<Vec3>(dat.natom);
   vel = vector<Vec3>(dat.natom);
   
-  /**
+  /*
    * calculate the number of degrees of freedom of the system
    * it is 3 times the number of particles (not virtual ones for which mass=0)
    * minus the number of constraints
@@ -232,7 +233,7 @@ void OMM_interface::doNsteps(uint32_t numSteps)
 void OMM_interface::minimise(double tol, uint32_t maxsteps, ENERGIES& ener)
 {
   // minimisation with L-BGFS
-  OpenMM::LocalEnergyMinimizer::minimize(*context, (int32_t)tol, maxsteps);
+  OpenMM::LocalEnergyMinimizer::minimize(*context,tol,(int32_t)maxsteps);
   
   // get back data from context and extract energies
   const int infoMask = OpenMM::State::Energy;
@@ -295,6 +296,8 @@ void OMM_interface::minimiseWithCopy(double tol, uint32_t maxsteps, ENERGIES& en
   context->setPositions(lpos);
   context->setVelocities(lvel);
   
+  context->applyConstraints(integrator->getConstraintTolerance());
+  context->applyVelocityConstraints(integrator->getConstraintTolerance());
 }
 
 void OMM_interface::minimiseWithCopy(double tol, uint32_t maxsteps, ENERGIES& ener,
@@ -327,6 +330,9 @@ void OMM_interface::minimiseWithCopy(double tol, uint32_t maxsteps, ENERGIES& en
   context->setPositions(lpos);
   context->setVelocities(lvel);
   
+  context->applyConstraints(integrator->getConstraintTolerance());
+  context->applyVelocityConstraints(integrator->getConstraintTolerance());
+  
 }
 
 void OMM_interface::setSimClockTime(double t)
@@ -346,8 +352,12 @@ void OMM_interface::setCrdsVels(ATOM at[])
   memcpy(pbc.data(),dat.pbc.data(),sizeof(pbc));
   
   context->setPeriodicBoxVectors(pbc[0],pbc[1],pbc[2]);
+  
   context->setPositions(pos);
   context->setVelocities(vel);
+  
+  context->applyConstraints(integrator->getConstraintTolerance());
+  context->applyVelocityConstraints(integrator->getConstraintTolerance());
   
 }
 
