@@ -24,7 +24,7 @@ If you find any error, bug, or limitation, please open an issue on https://gitla
 
 Continuous Integration is performed on a test case system (see ./ci), ensuring that no release breaks the ability to compile the software; furthermore reference results from a previous run are available in ./ci/ref.sim in an attempt to achieve reproducibility whenever possible.
 
-[![pipeline status](https://gitlab.inria.fr/parallel-replica/gen.parRep/badges/test_ci/pipeline.svg)](https://gitlab.inria.fr/parallel-replica/gen.parRep/commits/master)
+[![pipeline status](https://gitlab.inria.fr/parallel-replica/gen.parRep/badges/master/pipeline.svg)](https://gitlab.inria.fr/parallel-replica/gen.parRep/commits/master)
 
 ## DOCUMENTATION
 
